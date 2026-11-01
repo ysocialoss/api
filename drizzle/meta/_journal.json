@@ -22,6 +22,20 @@
       "when": 1793487951379,
       "tag": "0002_remove_legacy_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793575773404,
+      "tag": "0003_silly_black_widow",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793576762224,
+      "tag": "0004_flippant_crusher_hogan",
+      "breakpoints": true
     }
   ]
 }

@@ -2,8 +2,10 @@ import { sql } from "drizzle-orm";
 import {
   check,
   integer,
+  index,
   unique,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uuid,
@@ -76,3 +78,41 @@ export const authSessions = pgTable("auth_sessions", {
   refreshFailures: integer("refresh_failures").notNull().default(0),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 });
+
+export const posts = pgTable(
+  "posts",
+  {
+    id: uuid().defaultRandom().primaryKey(),
+    authorId: uuid("author_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    content: text().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, precision: 3 })
+      .notNull()
+      .defaultNow(),
+    editedAt: timestamp("edited_at", { withTimezone: true, precision: 3 }),
+  },
+  (table) => [
+    index("posts_feed_idx").on(table.createdAt.desc(), table.id.desc()),
+    check(
+      "posts_content_check",
+      sql`char_length(${table.content}) BETWEEN 1 AND 2000 AND ${table.content} ~ '[^[:space:]]'`,
+    ),
+  ],
+);
+
+export const postLikes = pgTable(
+  "post_likes",
+  {
+    postId: uuid("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.postId, table.userId] }),
+    index("post_likes_user_idx").on(table.userId),
+  ],
+);

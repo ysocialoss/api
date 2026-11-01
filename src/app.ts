@@ -1,3 +1,5 @@
+import profiles from "./profiles.ts";
+import posts from "./posts.ts";
 import { AuthError } from "./auth/provider.ts";
 import express, { type ErrorRequestHandler } from "express";
 import pg from "pg";
@@ -13,6 +15,8 @@ app.post("/webhooks/cns", (_req, res) => {
 });
 app.use(express.json({ limit: "16kb" }));
 app.use("/auth", auth);
+app.use("/api/posts", posts);
+app.use("/api/profiles", profiles);
 
 app.get("/", (_req, res) => {
   res.send("Hello World!");
@@ -52,6 +56,8 @@ app.use(handleError);
 if (import.meta.main) {
   try {
     const schema = await pool.query<{ ready: boolean }>(`SELECT
+      to_regclass('public.post_likes') IS NOT NULL AND
+      to_regclass('public.posts') IS NOT NULL AND
       to_regclass('public.users') IS NOT NULL AND
       to_regclass('public.auth_sessions') IS NOT NULL AND
       to_regclass('public.auth_identities') IS NOT NULL AND

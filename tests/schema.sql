@@ -1,4 +1,4 @@
--- Run against a disposable database after loading the bootstrap schema:
+-- Run against a disposable database after applying Drizzle migrations:
 -- psql -v ON_ERROR_STOP=1 -d DATABASE -f tests/schema.sql
 -- All fixtures roll back. Failures raise an exception and stop psql.
 BEGIN;
@@ -22,64 +22,41 @@ INSERT INTO users(id, handle) VALUES
     ('00000000-0000-0000-0000-000000000002', 'bob');
 SELECT pg_temp.expect_failure($q$INSERT INTO users(handle) VALUES ('Alice')$q$, '23514');
 SELECT pg_temp.expect_failure($q$INSERT INTO users(handle) VALUES ('alice')$q$, '23505');
-SELECT pg_temp.expect_failure($q$INSERT INTO follows(follower, following) VALUES
-    ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001')$q$, '23514');
-SELECT pg_temp.expect_failure($q$INSERT INTO posts(author) VALUES
-    ('00000000-0000-0000-0000-000000000099')$q$, '23503');
-SELECT pg_temp.expect_failure($q$INSERT INTO posts(author, type) VALUES
-    ('00000000-0000-0000-0000-000000000001', 'image')$q$, '23514');
-SELECT pg_temp.expect_failure($q$INSERT INTO posts(author, scheduled_at, published_at) VALUES
-    ('00000000-0000-0000-0000-000000000001', now() + interval '5 minutes', NULL)$q$, '23514');
-
-INSERT INTO communities(id, name, owner, tag) VALUES
-    ('00000000-0000-0000-0000-000000000010', 'Test community',
-     '00000000-0000-0000-0000-000000000001', 'test');
-INSERT INTO community_members(community_id, user_id) VALUES
-    ('00000000-0000-0000-0000-000000000010', '00000000-0000-0000-0000-000000000001');
-INSERT INTO posts(id, author, content) VALUES
-    ('00000000-0000-0000-0000-000000000020', '00000000-0000-0000-0000-000000000001', 'Hello');
-INSERT INTO posts(author, community) VALUES
-    ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000010');
-INSERT INTO posts(id, author, scheduled_at, published_at) VALUES
-    ('00000000-0000-0000-0000-000000000021', '00000000-0000-0000-0000-000000000001',
-     now() + interval '11 minutes', NULL);
--- Editing a pending post must not revalidate an unchanged schedule.
-UPDATE posts SET content = 'Edited' WHERE id = '00000000-0000-0000-0000-000000000021';
-SELECT pg_temp.expect_failure($q$UPDATE posts SET scheduled_at = now() + interval '1 minute'
-    WHERE id = '00000000-0000-0000-0000-000000000021'$q$, '23514');
-INSERT INTO post_votes(post_id, user_id, value) VALUES
-    ('00000000-0000-0000-0000-000000000020', '00000000-0000-0000-0000-000000000001', 1),
-    ('00000000-0000-0000-0000-000000000020', '00000000-0000-0000-0000-000000000002', -1);
-INSERT INTO reposts(post_id, user_id) VALUES
+SELECT pg_temp.expect_failure($q$INSERT INTO users(handle, display_name)
+    VALUES ('long_name', repeat('x', 81))$q$, '23514');
+SELECT pg_temp.expect_failure($q$INSERT INTO posts(author_id, content) VALUES
+    ('00000000-0000-0000-0000-000000000099', 'Hello')$q$, '23503');
+SELECT pg_temp.expect_failure($q$INSERT INTO posts(author_id, content) VALUES
+    ('00000000-0000-0000-0000-000000000001', '')$q$, '23514');
+SELECT pg_temp.expect_failure($q$INSERT INTO posts(author_id, content) VALUES
+    ('00000000-0000-0000-0000-000000000001', '   ')$q$, '23514');
+SELECT pg_temp.expect_failure($q$INSERT INTO posts(author_id, content) VALUES
+    ('00000000-0000-0000-0000-000000000001', repeat('x', 2001))$q$, '23514');
+INSERT INTO posts(id, author_id, content) VALUES
+    ('00000000-0000-0000-0000-000000000020', '00000000-0000-0000-0000-000000000001', repeat('😀', 2000));
+INSERT INTO post_likes(post_id, user_id) VALUES
     ('00000000-0000-0000-0000-000000000020', '00000000-0000-0000-0000-000000000001'),
     ('00000000-0000-0000-0000-000000000020', '00000000-0000-0000-0000-000000000002');
-SELECT pg_temp.expect_failure($q$INSERT INTO post_votes(post_id, user_id, value) VALUES
-    ('00000000-0000-0000-0000-000000000020', '00000000-0000-0000-0000-000000000001', -1)$q$, '23505');
-INSERT INTO conversations(id, type) VALUES ('00000000-0000-0000-0000-000000000030', 'dm');
-INSERT INTO conversation_members(conversation_id, user_id) VALUES
-    ('00000000-0000-0000-0000-000000000030', '00000000-0000-0000-0000-000000000001');
-INSERT INTO messages(conversation_id, sender, ciphertext, protocol_version) VALUES
-    ('00000000-0000-0000-0000-000000000030', '00000000-0000-0000-0000-000000000001', decode('aabb', 'hex'), 1);
-DELETE FROM conversation_members;
+SELECT pg_temp.expect_failure($q$INSERT INTO post_likes(post_id, user_id) VALUES
+    ('00000000-0000-0000-0000-000000000020', '00000000-0000-0000-0000-000000000001')$q$, '23505');
+SELECT pg_temp.expect_failure($q$INSERT INTO post_likes(post_id, user_id) VALUES
+    ('00000000-0000-0000-0000-000000000099', '00000000-0000-0000-0000-000000000001')$q$, '23503');
+SELECT pg_temp.expect_failure($q$INSERT INTO post_likes(post_id, user_id) VALUES
+    ('00000000-0000-0000-0000-000000000020', '00000000-0000-0000-0000-000000000099')$q$, '23503');
+DELETE FROM users WHERE id = '00000000-0000-0000-0000-000000000002';
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT FROM post_stats WHERE post_id = '00000000-0000-0000-0000-000000000020'
-                   AND likes = 1 AND dislikes = 1 AND reposts = 2) THEN
-        RAISE EXCEPTION 'Reaction counts are incorrect';
-    END IF;
-    IF (SELECT count(*) FROM posts WHERE community IS NULL AND published_at <= now()) <> 1 THEN
-        RAISE EXCEPTION 'Main feed includes community or pending posts';
-    END IF;
-    IF (SELECT count(*) FROM messages) <> 1 THEN
-        RAISE EXCEPTION 'Leaving a chat removed message history';
+    IF (SELECT count(*) FROM post_likes WHERE post_id = '00000000-0000-0000-0000-000000000020') <> 1 THEN
+        RAISE EXCEPTION 'User deletion did not remove their like';
     END IF;
 END;
 $$;
-DELETE FROM posts WHERE id = '00000000-0000-0000-0000-000000000020';
+DELETE FROM users WHERE id = '00000000-0000-0000-0000-000000000001';
 DO $$
 BEGIN
-    IF EXISTS (SELECT FROM post_votes) OR EXISTS (SELECT FROM reposts) THEN
-        RAISE EXCEPTION 'Post deletion left orphan reactions';
+    IF EXISTS (SELECT FROM posts WHERE id = '00000000-0000-0000-0000-000000000020') OR
+       EXISTS (SELECT FROM post_likes WHERE post_id = '00000000-0000-0000-0000-000000000020') THEN
+        RAISE EXCEPTION 'Author deletion left orphan posts or likes';
     END IF;
 END;
 $$;

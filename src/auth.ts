@@ -1,5 +1,6 @@
+import { cookie, requireOrigin } from "./auth/request.ts";
 import { createHash } from "node:crypto";
-import { Router, type Request } from "express";
+import { Router } from "express";
 import { and, eq, gt, lt } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "./db/index.ts";
@@ -22,19 +23,6 @@ const cookieOptions = {
   path: "/",
 } satisfies import("express").CookieOptions;
 const duration = 30 * 86400000;
-function cookie(req: Request, key: string) {
-  return (
-    req.headers.cookie
-      ?.split(";")
-      .map((value) => value.trim())
-      .find((value) => value.startsWith(`${key}=`))
-      ?.slice(key.length + 1) ?? ""
-  );
-}
-function requireOrigin(req: Request) {
-  if (req.headers.origin !== env.APP_ORIGIN)
-    throw new AuthError(403, "invalid_origin");
-}
 router.use((_req, res, next) => {
   res.set({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
   next();
