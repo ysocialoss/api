@@ -1,4 +1,4 @@
-import { AuthError } from './auth/provider.ts';
+import { AuthError } from "./auth/provider.ts";
 import express, { type ErrorRequestHandler } from "express";
 import pg from "pg";
 import auth from "./auth.ts";
@@ -8,8 +8,8 @@ import { env } from "./config.ts";
 export const app = express();
 // The provider has not supplied its webhook envelope or timestamp header contract.
 // Do not acknowledge delivery until signature verification can be implemented.
-app.post('/webhooks/cns', (_req, res) => {
-  res.status(503).json({ error: 'webhooks_not_configured' });
+app.post("/webhooks/cns", (_req, res) => {
+  res.status(503).json({ error: "webhooks_not_configured" });
 });
 app.use(express.json({ limit: "16kb" }));
 app.use("/auth", auth);
@@ -20,7 +20,8 @@ app.get("/", (_req, res) => {
 
 const handleError: ErrorRequestHandler = (error: unknown, _req, res, _next) => {
   if (error instanceof AuthError) {
-    res.status(error.status).json({ error: error.code }); return;
+    res.status(error.status).json({ error: error.code });
+    return;
   }
   // Drizzle wraps the original PostgreSQL error in Error.cause.
   const cause = error instanceof Error && error.cause ? error.cause : error;
@@ -40,7 +41,10 @@ const handleError: ErrorRequestHandler = (error: unknown, _req, res, _next) => {
     res.status(413).json({ error: "Request body is too large" });
     return;
   }
-  console.error({ event: "request_failed", databaseCode: cause instanceof pg.DatabaseError ? cause.code : undefined });
+  console.error({
+    event: "request_failed",
+    databaseCode: cause instanceof pg.DatabaseError ? cause.code : undefined,
+  });
   res.status(500).json({ error: "Internal server error" });
 };
 app.use(handleError);
@@ -53,7 +57,9 @@ if (import.meta.main) {
       to_regclass('public.auth_identities') IS NOT NULL AND
       to_regclass('public.oauth_transactions') IS NOT NULL AS ready`);
     if (!schema.rows[0]?.ready) {
-      throw new Error('Database schema is missing. Run pnpm db:migrate in api/ before starting the API.');
+      throw new Error(
+        "Database schema is missing. Run pnpm db:migrate in api/ before starting the API.",
+      );
     }
     const server = app.listen(env.PORT, () =>
       console.info(`API listening on port ${env.PORT}`),

@@ -73,12 +73,8 @@
           "name": "auth_identities_user_id_users_id_fk",
           "tableFrom": "auth_identities",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -88,17 +84,12 @@
         "auth_identities_user_id_unique": {
           "name": "auth_identities_user_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "user_id"
-          ]
+          "columns": ["user_id"]
         },
         "auth_identity_subject_unique": {
           "name": "auth_identity_subject_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "issuer",
-            "subject"
-          ]
+          "columns": ["issuer", "subject"]
         }
       },
       "policies": {},
@@ -159,12 +150,8 @@
           "name": "auth_sessions_identity_id_auth_identities_id_fk",
           "tableFrom": "auth_sessions",
           "tableTo": "auth_identities",
-          "columnsFrom": [
-            "identity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["identity_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -278,9 +265,7 @@
         "users_handle_unique": {
           "name": "users_handle_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "handle"
-          ]
+          "columns": ["handle"]
         }
       },
       "policies": {},

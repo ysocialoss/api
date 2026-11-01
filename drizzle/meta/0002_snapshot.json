@@ -72,13 +72,9 @@
         "auth_identities_user_id_users_id_fk": {
           "name": "auth_identities_user_id_users_id_fk",
           "tableFrom": "auth_identities",
-          "columnsFrom": [
-            "user_id"
-          ],
+          "columnsFrom": ["user_id"],
           "tableTo": "users",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "set null"
         }
@@ -87,17 +83,12 @@
       "uniqueConstraints": {
         "auth_identities_user_id_unique": {
           "name": "auth_identities_user_id_unique",
-          "columns": [
-            "user_id"
-          ],
+          "columns": ["user_id"],
           "nullsNotDistinct": false
         },
         "auth_identity_subject_unique": {
           "name": "auth_identity_subject_unique",
-          "columns": [
-            "issuer",
-            "subject"
-          ],
+          "columns": ["issuer", "subject"],
           "nullsNotDistinct": false
         }
       },
@@ -158,13 +149,9 @@
         "auth_sessions_identity_id_auth_identities_id_fk": {
           "name": "auth_sessions_identity_id_auth_identities_id_fk",
           "tableFrom": "auth_sessions",
-          "columnsFrom": [
-            "identity_id"
-          ],
+          "columnsFrom": ["identity_id"],
           "tableTo": "auth_identities",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -277,9 +264,7 @@
       "uniqueConstraints": {
         "users_handle_unique": {
           "name": "users_handle_unique",
-          "columns": [
-            "handle"
-          ],
+          "columns": ["handle"],
           "nullsNotDistinct": false
         }
       },

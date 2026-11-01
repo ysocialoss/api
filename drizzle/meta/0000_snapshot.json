@@ -64,9 +64,7 @@
         "users_handle_unique": {
           "name": "users_handle_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "handle"
-          ]
+          "columns": ["handle"]
         }
       },
       "policies": {},

@@ -25,8 +25,11 @@ export const env = z
     CNS_LOGIN_URL: z.url().default("https://accounts.cns.ad/login"),
     CNS_API_ORIGIN: z.url().default("https://api.cns.ad"),
     SESSION_ENCRYPTION_KEY: z.preprocess(
-      value => value === '' ? undefined : value,
-      z.string().regex(/^[a-fA-F0-9]{64}$/).optional(),
+      (value) => (value === "" ? undefined : value),
+      z
+        .string()
+        .regex(/^[a-fA-F0-9]{64}$/)
+        .optional(),
     ),
     NODE_ENV: z
       .enum(["development", "test", "production"])
@@ -44,6 +47,11 @@ if (
   );
 }
 
-if (env.NODE_ENV === 'production' && [env.CNS_DISCOVERY_URL, env.CNS_LOGIN_URL, env.CNS_API_ORIGIN].some(value => !value.startsWith('https:'))) {
-  throw new Error('Production CNS endpoints must use HTTPS');
+if (
+  env.NODE_ENV === "production" &&
+  [env.CNS_DISCOVERY_URL, env.CNS_LOGIN_URL, env.CNS_API_ORIGIN].some(
+    (value) => !value.startsWith("https:"),
+  )
+) {
+  throw new Error("Production CNS endpoints must use HTTPS");
 }

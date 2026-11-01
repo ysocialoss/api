@@ -25,15 +25,15 @@ Run the web app separately with `cd web && pnpm dev` from the project root, then
 
 The October 31 OAuth guide is authoritative where the other CNS documents disagree. This implementation requires an ID token, verifies RS256, issuer, audience, expiry and nonce, and never falls back to unverified identity or password collection.
 
-| Setting | Local default / purpose |
-| --- | --- |
-| `APP_ORIGIN` | `http://localhost:3000`; production uses `https://ysocial.cc` |
-| `CNS_CLIENT_ID` | `ysocial`, a public PKCE client with no client secret |
-| `SESSION_ENCRYPTION_KEY` | 32 random bytes encoded as 64 hex characters |
-| `CNS_DISCOVERY_URL` | CNS discovery metadata; override only for a trusted test provider |
-| `CNS_LOGIN_URL` | CNS hosted login page |
-| `CNS_API_ORIGIN` | CNS API origin for refresh, logout, and directory requests |
-| `NODE_ENV` | Set `production` for deployment; HTTPS and encryption key are required |
+| Setting                  | Local default / purpose                                                |
+| ------------------------ | ---------------------------------------------------------------------- |
+| `APP_ORIGIN`             | `http://localhost:3000`; production uses `https://ysocial.cc`          |
+| `CNS_CLIENT_ID`          | `ysocial`, a public PKCE client with no client secret                  |
+| `SESSION_ENCRYPTION_KEY` | 32 random bytes encoded as 64 hex characters                           |
+| `CNS_DISCOVERY_URL`      | CNS discovery metadata; override only for a trusted test provider      |
+| `CNS_LOGIN_URL`          | CNS hosted login page                                                  |
+| `CNS_API_ORIGIN`         | CNS API origin for refresh, logout, and directory requests             |
+| `NODE_ENV`               | Set `production` for deployment; HTTPS and encryption key are required |
 
 Register `http://localhost:3000/auth/callback` and `https://ysocial.cc/auth/callback` exactly with CNS, with scopes `openid profile users:read`. The server exchanges codes as JSON. Tokens remain encrypted in PostgreSQL; browsers receive only opaque HttpOnly cookies. Production must use HTTPS. Set `API_URL` in the web server environment if Express is not at `http://127.0.0.1:3100`.
 
@@ -73,8 +73,8 @@ what do we need?
 - communities
   - seperated from main feed
   - tags (similar to discord)
-~- posts
-~    - types (voice, live irc type shi, images, video, *streams*)
+    ~- posts
+    ~ - types (voice, live irc type shi, images, video, _streams_)
 - *chats
   - dm & group messages ENCRYPTION
 
@@ -82,15 +82,18 @@ api brainstorm
 base: ysocial.cc/api/
 
 POST /post
-```json 
+
+```json
 {
   "content": "message",
   "type": "text" || "image" || "gif" || "video" || "voice" || "live" || "streams",
   "scheduled": "unixtimestamp" // must be at least 10min from now
 }
 ```
+
 example of a live post scheduled to post on Wed, 28 Oct 2026 23:00:00 GMT:
-```json 
+
+```json
 {
   "content": "This is a post!",
   "type": "live",
@@ -100,32 +103,35 @@ example of a live post scheduled to post on Wed, 28 Oct 2026 23:00:00 GMT:
 
 GET /post/<uuid>
 response:
+
 ```json
 {
   "date": "unixtimestamp",
-  "author": "string",   // uuid from user
+  "author": "string", // uuid from user
   "likes": "int",
   "dislikes": "int",
   "reposts": "int",
-  "content": "string",  // allowed empty
-  "image": "uuid",      // optional
-  "gif": "uuid",        // optional
-  "video": "uuid",      // optional
-  "voice": "uuid",      // optional
-  "realtime": "uuid",   // optional
-  "stream": "uuid",     // optional
+  "content": "string", // allowed empty
+  "image": "uuid", // optional
+  "gif": "uuid", // optional
+  "video": "uuid", // optional
+  "voice": "uuid", // optional
+  "realtime": "uuid", // optional
+  "stream": "uuid" // optional
 }
 ```
+
 example:
+
 ```json
 {
-  "date": "1793228400",                               // Posted on Wed, 28 Oct 2026 23:00:00 GMT
-  "author": "3ee7adf2-bb29-4b3f-998e-464dc8d307b9",   // uuid of user @whz
+  "date": "1793228400", // Posted on Wed, 28 Oct 2026 23:00:00 GMT
+  "author": "3ee7adf2-bb29-4b3f-998e-464dc8d307b9", // uuid of user @whz
   "likes": "2",
   "dislikes": "9",
   "reposts": "1",
-  "content": "This is my Post!",  // allowed empty
-  "image": "ca9e94a0-5ff0-4bb8-9f7a-ff020d5d80cb",      // optional
+  "content": "This is my Post!", // allowed empty
+  "image": "ca9e94a0-5ff0-4bb8-9f7a-ff020d5d80cb" // optional
   // "gif": "uuid",        // optional
   // "video": "uuid",      // optional
   // "voice": "uuid",      // optional
@@ -136,6 +142,7 @@ example:
 
 GET /communities/create
 request:
+
 ```json
 {
   "name": "string",
@@ -144,7 +151,9 @@ request:
   ""
 }
 ```
+
 response:
+
 ```json
 {
   "uuid": "uuid",
@@ -156,6 +165,7 @@ response:
 
 GET /communities/feed/<uuid>
 response:
+
 ```json
 {
   "uuid": {
@@ -176,7 +186,9 @@ response:
   }
 }
 ```
+
 example:
+
 ```json
 {
   "ac8d7b9a-d677-4cae-a9b1-f5abc400fac9": {
@@ -185,7 +197,7 @@ example:
     "likes": "1",
     "dislikes": "0",
     "reposts": "0",
-    "content": "What's a community?",
+    "content": "What's a community?"
   },
   "c578a641-264d-4a9d-bd46-104cc60befe4": {
     "date": "1793401200", // Fri, 30 Oct 2026 23:00:00 GMT
@@ -193,7 +205,7 @@ example:
     "likes": "0",
     "dislikes": "0",
     "reposts": "0",
-    "content": "a",
+    "content": "a"
   }
 }
 ```

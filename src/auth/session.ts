@@ -43,7 +43,10 @@ export async function readSessionHash(tokenHash: string) {
         await tx
           .update(authSessions)
           .set({
-            encryptedTokens: encrypt({ ...rotated, scope: rotated.scope ?? tokens.scope }),
+            encryptedTokens: encrypt({
+              ...rotated,
+              scope: rotated.scope ?? tokens.scope,
+            }),
             refreshAfter: new Date(Date.now() + rotated.expires_in * 800),
             retryAfter: null,
             refreshFailures: 0,
