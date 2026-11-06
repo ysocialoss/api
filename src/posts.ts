@@ -3,12 +3,13 @@ import {
   postSelection,
   serializePost,
   reactionSelection,
+  repostSelection,
 } from "./post-data.ts";
 import { Router, type Request } from "express";
-import { and, desc, eq, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "./db/index.ts";
-import { postLikes, posts, users } from "./db/schema.ts";
+import { postLikes, postReposts, posts, users } from "./db/schema.ts";
 import { cookie, requireOrigin, readViewerId } from "./auth/request.ts";
 import { readSession } from "./auth/session.ts";
 import { AuthError } from "./auth/provider.ts";
@@ -41,7 +42,10 @@ router.use((_req, res, next) => {
   res.set("Cache-Control", "no-store");
   next();
 });
-router.get("/", async (req, res) => {
+const listPosts: import("express").RequestHandler = async (req, res) => {
+  const parentId =
+    typeof req.params.id === "string" ? req.params.id : undefined;
+  if (parentId) await findPost(parentId);
   const viewerId = await readViewerId(req);
   let cursor: z.infer<typeof cursorSchema> | undefined;
   if (req.query.cursor !== undefined) {
@@ -60,15 +64,18 @@ router.get("/", async (req, res) => {
     .from(posts)
     .innerJoin(users, eq(users.id, posts.authorId))
     .where(
-      cursor
-        ? or(
-            lt(posts.createdAt, new Date(cursor.createdAt)),
-            and(
-              eq(posts.createdAt, new Date(cursor.createdAt)),
-              lt(posts.id, cursor.id),
-            ),
-          )
-        : undefined,
+      and(
+        parentId ? eq(posts.parentId, parentId) : isNull(posts.parentId),
+        cursor
+          ? or(
+              lt(posts.createdAt, new Date(cursor.createdAt)),
+              and(
+                eq(posts.createdAt, new Date(cursor.createdAt)),
+                lt(posts.id, cursor.id),
+              ),
+            )
+          : undefined,
+      ),
     )
     .orderBy(desc(posts.createdAt), desc(posts.id))
     .limit(21);
@@ -87,7 +94,8 @@ router.get("/", async (req, res) => {
         : null,
     serverNow: new Date().toISOString(),
   });
-});
+};
+router.get("/", listPosts);
 async function requireUser(req: Request) {
   requireOrigin(req);
   const session = await readSession(cookie(req, "session"));
@@ -105,7 +113,15 @@ router.post("/", async (req, res) => {
     .values({ authorId: user.id, content: parsed.data.content })
     .returning(postFields);
   res.status(201).json({
-    post: serializePost({ ...post, author: user, likes: 0, liked: false }),
+    post: serializePost({
+      ...post,
+      author: user,
+      likes: 0,
+      liked: false,
+      replies: 0,
+      reposts: 0,
+      reposted: false,
+    }),
     serverNow: new Date().toISOString(),
   });
 });
@@ -117,6 +133,41 @@ router.use("/:id", (req, _res, next) => {
 router.get("/:id", async (req, res) => {
   res.json({
     post: await findPost(req.params.id, await readViewerId(req)),
+    serverNow: new Date().toISOString(),
+  });
+});
+router.get("/:id/replies", listPosts);
+router.post("/:id/replies", async (req, res) => {
+  const user = await requireUser(req);
+  const parsed = contentSchema.safeParse(req.body);
+  if (!parsed.success) throw new AuthError(400, "invalid_content");
+  const post = await db.transaction(async (tx) => {
+    const [parent] = await tx
+      .select({ id: posts.id })
+      .from(posts)
+      .where(eq(posts.id, req.params.id))
+      .for("key share");
+    if (!parent) throw new AuthError(404, "post_not_found");
+    const [saved] = await tx
+      .insert(posts)
+      .values({
+        authorId: user.id,
+        content: parsed.data.content,
+        parentId: parent.id,
+      })
+      .returning(postFields);
+    return saved;
+  });
+  res.status(201).json({
+    post: serializePost({
+      ...post,
+      author: user,
+      likes: 0,
+      liked: false,
+      replies: 0,
+      reposts: 0,
+      reposted: false,
+    }),
     serverNow: new Date().toISOString(),
   });
 });
@@ -155,6 +206,43 @@ router.put("/:id/like", async (req, res) => {
 });
 router.delete("/:id/like", async (req, res) => {
   res.json(await setLike(req, false));
+});
+async function setRepost(req: Request, reposted: boolean) {
+  const user = await requireUser(req);
+  const parsedId = z.uuid().safeParse(req.params.id);
+  if (!parsedId.success) throw new AuthError(400, "invalid_post_id");
+  const id = parsedId.data;
+  return db.transaction(async (tx) => {
+    const [post] = await tx
+      .select({ id: posts.id })
+      .from(posts)
+      .where(eq(posts.id, id))
+      .for("update");
+    if (!post) throw new AuthError(404, "post_not_found");
+    if (reposted) {
+      await tx
+        .insert(postReposts)
+        .values({ postId: id, userId: user.id })
+        .onConflictDoNothing();
+    } else {
+      await tx
+        .delete(postReposts)
+        .where(
+          and(eq(postReposts.postId, id), eq(postReposts.userId, user.id)),
+        );
+    }
+    const [state] = await tx
+      .select(repostSelection(user.id))
+      .from(posts)
+      .where(eq(posts.id, id));
+    return state;
+  });
+}
+router.put("/:id/repost", async (req, res) => {
+  res.json(await setRepost(req, true));
+});
+router.delete("/:id/repost", async (req, res) => {
+  res.json(await setRepost(req, false));
 });
 router.patch("/:id", async (req, res) => {
   const user = await requireUser(req);

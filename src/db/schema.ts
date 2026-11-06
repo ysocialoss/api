@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   check,
   integer,
   index,
@@ -86,6 +87,9 @@ export const posts = pgTable(
     authorId: uuid("author_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    parentId: uuid("parent_id").references((): AnyPgColumn => posts.id, {
+      onDelete: "cascade",
+    }),
     content: text().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, precision: 3 })
       .notNull()
@@ -93,6 +97,11 @@ export const posts = pgTable(
     editedAt: timestamp("edited_at", { withTimezone: true, precision: 3 }),
   },
   (table) => [
+    index("posts_parent_idx").on(
+      table.parentId,
+      table.createdAt.desc(),
+      table.id.desc(),
+    ),
     index("posts_feed_idx").on(table.createdAt.desc(), table.id.desc()),
     check(
       "posts_content_check",
@@ -114,5 +123,28 @@ export const postLikes = pgTable(
   (table) => [
     primaryKey({ columns: [table.postId, table.userId] }),
     index("post_likes_user_idx").on(table.userId),
+  ],
+);
+
+export const postReposts = pgTable(
+  "post_reposts",
+  {
+    postId: uuid("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true, precision: 3 })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.postId, table.userId] }),
+    index("post_reposts_user_idx").on(
+      table.userId,
+      table.createdAt.desc(),
+      table.postId.desc(),
+    ),
   ],
 );

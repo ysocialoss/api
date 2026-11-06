@@ -288,6 +288,313 @@ test("persistent text posts and cursor feed", async (t) => {
     );
 
     await t.test(
+      "reply threads persist, paginate, and obey post permissions",
+      async () => {
+        const path = `/${postId}/replies`;
+        assert.equal(
+          (await request(path, "POST", "", { content: "Hello" })).status,
+          401,
+        );
+        assert.equal(
+          (await request(path, "POST", pending.cookie, { content: "Hello" }))
+            .status,
+          403,
+        );
+        assert.equal(
+          (
+            await request(
+              path,
+              "POST",
+              bob.cookie,
+              { content: "Hello" },
+              "https://attacker.example",
+            )
+          ).status,
+          403,
+        );
+        for (const content of ["", " ", "x".repeat(2001), "hello\u0000world"])
+          assert.equal(
+            (await request(path, "POST", bob.cookie, { content })).status,
+            400,
+          );
+        assert.equal((await request("/bad/replies")).status, 400);
+        assert.equal((await request(`/${randomUUID()}/replies`)).status, 404);
+        assert.equal(
+          (
+            await request(`/${randomUUID()}/replies`, "POST", bob.cookie, {
+              content: "Missing",
+            })
+          ).status,
+          404,
+        );
+        assert.deepEqual((await (await request(path)).json()).posts, []);
+        const response = await request(path, "POST", bob.cookie, {
+          content: "  A reply 😀  ",
+        });
+        assert.equal(response.status, 201);
+        const reply = (await response.json()).post;
+        assert.equal(reply.parentId, postId);
+        assert.equal(reply.content, "A reply 😀");
+        assert.equal(reply.author.id, bob.id);
+        assert.equal(reply.replies, 0);
+        assert.equal(
+          (
+            await pool.query("SELECT parent_id FROM posts WHERE id=$1", [
+              reply.id,
+            ])
+          ).rows[0].parent_id,
+          postId,
+        );
+        assert.equal(
+          (await (await request(`/${postId}`)).json()).post.replies,
+          1,
+        );
+        const feed = await (await request()).json();
+        assert.ok(
+          !feed.posts.some((post: { id: string }) => post.id === reply.id),
+        );
+        assert.equal(
+          (
+            await request(`/${reply.id}`, "PATCH", alice.cookie, {
+              content: "Wrong",
+            })
+          ).status,
+          403,
+        );
+        assert.equal(
+          (
+            await request(`/${reply.id}`, "PATCH", bob.cookie, {
+              content: "Edited reply",
+            })
+          ).status,
+          200,
+        );
+        assert.equal(
+          (await request(`/${reply.id}/like`, "PUT", alice.cookie)).status,
+          200,
+        );
+        assert.equal(
+          (await (await request(path, "GET", alice.cookie)).json()).posts[0]
+            .liked,
+          true,
+        );
+        const nested = await request(
+          `/${reply.id}/replies`,
+          "POST",
+          alice.cookie,
+          { content: "Nested" },
+        );
+        assert.equal(nested.status, 201);
+        const nestedId = (await nested.json()).post.id;
+        const bobProfile = await (
+          await fetch(
+            `http://127.0.0.1:${address.port}/api/profiles/${bob.handle}`,
+          )
+        ).json();
+        assert.ok(
+          bobProfile.posts.every(
+            (post: { parentId: string | null }) => post.parentId === null,
+          ),
+        );
+        assert.equal(bobProfile.replies[0].post.id, reply.id);
+        assert.deepEqual(
+          bobProfile.replies[0].thread.map((post: { id: string }) => post.id),
+          [postId],
+        );
+        const aliceProfile = await (
+          await fetch(
+            `http://127.0.0.1:${address.port}/api/profiles/${alice.handle}`,
+          )
+        ).json();
+        const nestedEntry = aliceProfile.replies.find(
+          (entry: { post: { id: string } }) => entry.post.id === nestedId,
+        );
+        assert.deepEqual(
+          nestedEntry.thread.map((post: { id: string }) => post.id),
+          [postId, reply.id],
+        );
+
+        assert.equal(
+          (await (await request(`/${reply.id}`)).json()).post.replies,
+          1,
+        );
+        // More than a page with identical timestamps exercises the UUID cursor tie-breaker.
+        for (let i = 0; i < 22; i++)
+          await pool.query(
+            "INSERT INTO posts(author_id,parent_id,content,created_at) VALUES ($1,$2,'Page reply','2050-01-01')",
+            [bob.id, postId],
+          );
+        const first = await (await request(path)).json();
+        assert.equal(first.posts.length, 20);
+        assert.ok(first.nextCursor);
+        const second = await (
+          await request(
+            `${path}?cursor=${encodeURIComponent(first.nextCursor)}`,
+          )
+        ).json();
+        assert.equal(second.posts.length, 3);
+        assert.equal(second.nextCursor, null);
+        assert.equal(
+          new Set(
+            [...first.posts, ...second.posts].map(
+              (post: { id: string }) => post.id,
+            ),
+          ).size,
+          23,
+        );
+        assert.equal(
+          (await request(`/${reply.id}`, "DELETE", alice.cookie)).status,
+          403,
+        );
+        assert.equal(
+          (await request(`/${reply.id}`, "DELETE", bob.cookie)).status,
+          204,
+        );
+        assert.equal((await request(`/${nestedId}`)).status, 404);
+        assert.equal(
+          (await (await request(`/${postId}`)).json()).post.replies,
+          22,
+        );
+      },
+    );
+
+    await t.test(
+      "reposts persist once per user, undo safely, and appear on profiles",
+      async () => {
+        const path = `/${postId}/repost`;
+        for (const method of ["PUT", "DELETE"]) {
+          assert.equal((await request(path, method)).status, 401);
+          assert.equal(
+            (await request(path, method, pending.cookie)).status,
+            403,
+          );
+          assert.equal(
+            (
+              await request(
+                path,
+                method,
+                bob.cookie,
+                undefined,
+                "https://attacker.example",
+              )
+            ).status,
+            403,
+          );
+          assert.equal(
+            (await request("/bad/repost", method, bob.cookie)).status,
+            400,
+          );
+          assert.equal(
+            (await request(`/${randomUUID()}/repost`, method, bob.cookie))
+              .status,
+            404,
+          );
+        }
+        const repeated = await Promise.all(
+          Array.from({ length: 4 }, () => request(path, "PUT", bob.cookie)),
+        );
+        for (const response of repeated) {
+          assert.equal(response.status, 200);
+          assert.deepEqual(await response.json(), {
+            reposts: 1,
+            reposted: true,
+          });
+        }
+        const stored = await pool.query(
+          "SELECT created_at FROM post_reposts WHERE post_id=$1 AND user_id=$2",
+          [postId, bob.id],
+        );
+        await request(path, "PUT", bob.cookie);
+        const retried = await pool.query(
+          "SELECT created_at FROM post_reposts WHERE post_id=$1 AND user_id=$2",
+          [postId, bob.id],
+        );
+        assert.deepEqual(retried.rows, stored.rows);
+        assert.deepEqual(
+          await (await request(path, "PUT", alice.cookie)).json(),
+          { reposts: 2, reposted: true },
+        );
+        const publicPost = (await (await request(`/${postId}`)).json()).post;
+        assert.equal(publicPost.reposts, 2);
+        assert.equal(publicPost.reposted, false);
+        assert.equal(
+          (await (await request(`/${postId}`, "GET", bob.cookie)).json()).post
+            .reposted,
+          true,
+        );
+        const feed = await (await request("", "GET", bob.cookie)).json();
+        assert.equal(
+          feed.posts.find((post: { id: string }) => post.id === postId)
+            .reposted,
+          true,
+        );
+        const profileUrl = `http://127.0.0.1:${address.port}/api/profiles/${bob.handle}`;
+        const profile = await (
+          await fetch(profileUrl, { headers: { cookie: bob.cookie } })
+        ).json();
+        assert.equal(profile.reposts.length, 1);
+        assert.equal(profile.reposts[0].id, postId);
+        assert.equal(profile.reposts[0].author.id, alice.id);
+        assert.equal(profile.reposts[0].reposted, true);
+        assert.ok(
+          !profile.posts.some((post: { id: string }) => post.id === postId),
+        );
+        assert.equal(
+          (await (await fetch(profileUrl)).json()).reposts[0].reposted,
+          false,
+        );
+        const unposts = await Promise.all(
+          Array.from({ length: 4 }, () => request(path, "DELETE", bob.cookie)),
+        );
+        for (const response of unposts)
+          assert.deepEqual(await response.json(), {
+            reposts: 1,
+            reposted: false,
+          });
+        assert.deepEqual((await (await fetch(profileUrl)).json()).reposts, []);
+        // Reposts are ordered by when they were shared, independently of publication time.
+        await request(path, "PUT", bob.cookie);
+        await pool.query(
+          "UPDATE post_reposts SET created_at='2000-01-01' WHERE post_id=$1 AND user_id=$2",
+          [postId, bob.id],
+        );
+        const another = (
+          await (
+            await request("", "POST", alice.cookie, {
+              content: "Another original",
+            })
+          ).json()
+        ).post;
+        await request(`/${another.id}/repost`, "PUT", bob.cookie);
+        assert.deepEqual(
+          (await (await fetch(profileUrl)).json()).reposts.map(
+            (post: { id: string }) => post.id,
+          ),
+          [another.id, postId],
+        );
+        await request(`/${another.id}`, "DELETE", alice.cookie);
+        assert.deepEqual(
+          (await (await fetch(profileUrl)).json()).reposts.map(
+            (post: { id: string }) => post.id,
+          ),
+          [postId],
+        );
+        const temp = await account();
+        await request(path, "PUT", temp.cookie);
+        await pool.query("DELETE FROM users WHERE id=$1", [temp.id]);
+        assert.equal(
+          (
+            await pool.query(
+              "SELECT count(*)::int AS count FROM post_reposts WHERE user_id=$1",
+              [temp.id],
+            )
+          ).rows[0].count,
+          0,
+        );
+      },
+    );
+
+    await t.test(
       "author-only edits preserve publication and deadline; delete remains available",
       async () => {
         const before = await pool.query(
@@ -315,9 +622,11 @@ test("persistent text posts and cursor feed", async (t) => {
           400,
         );
         assert.equal(
-          (await request(`/${postId}`, "PATCH", alice.cookie, {
-            content: "hello\u0000world",
-          })).status,
+          (
+            await request(`/${postId}`, "PATCH", alice.cookie, {
+              content: "hello\u0000world",
+            })
+          ).status,
           400,
         );
         const response = await request(`/${postId}`, "PATCH", alice.cookie, {
@@ -452,6 +761,15 @@ test("persistent text posts and cursor feed", async (t) => {
           (
             await pool.query(
               "SELECT count(*)::int AS count FROM post_likes WHERE post_id=$1",
+              [postId],
+            )
+          ).rows[0].count,
+          0,
+        );
+        assert.equal(
+          (
+            await pool.query(
+              "SELECT count(*)::int AS count FROM post_reposts WHERE post_id=$1",
               [postId],
             )
           ).rows[0].count,

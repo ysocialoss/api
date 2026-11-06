@@ -36,6 +36,20 @@
       "when": 1793576762224,
       "tag": "0004_flippant_crusher_hogan",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793983748615,
+      "tag": "0005_happy_thunderbolt_ross",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793985531443,
+      "tag": "0006_awesome_cardiac",
+      "breakpoints": true
     }
   ]
 }
