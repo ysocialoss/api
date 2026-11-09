@@ -38,15 +38,13 @@ router.get("/login", async (req, res) => {
     .delete(oauthTransactions)
     .where(lt(oauthTransactions.expiresAt, new Date()));
   await db.delete(authSessions).where(lt(authSessions.expiresAt, new Date()));
-  await db
-    .insert(oauthTransactions)
-    .values({
-      state: hash(state),
-      browserHash: hash(browser),
-      verifier,
-      nonce,
-      expiresAt: new Date(Date.now() + 600000),
-    });
+  await db.insert(oauthTransactions).values({
+    state: hash(state),
+    browserHash: hash(browser),
+    verifier,
+    nonce,
+    expiresAt: new Date(Date.now() + 600000),
+  });
   res.cookie("oauth_browser", browser, { ...cookieOptions, maxAge: 600000 });
   const url = new URL(env.CNS_LOGIN_URL);
   url.search = new URLSearchParams({
@@ -116,15 +114,13 @@ router.get("/callback", async (req, res) => {
         })
         .returning();
       if (identity.deletedAt) throw new AuthError(403, "account_deleted");
-      await tx
-        .insert(authSessions)
-        .values({
-          tokenHash: hash(token),
-          identityId: identity.id,
-          encryptedTokens: encrypt(result.tokens),
-          refreshAfter: new Date(Date.now() + result.tokens.expires_in * 800),
-          expiresAt: new Date(Date.now() + duration),
-        });
+      await tx.insert(authSessions).values({
+        tokenHash: hash(token),
+        identityId: identity.id,
+        encryptedTokens: encrypt(result.tokens),
+        refreshAfter: new Date(Date.now() + result.tokens.expires_in * 800),
+        expiresAt: new Date(Date.now() + duration),
+      });
       return identity.userId;
     });
     res.cookie("session", token, { ...cookieOptions, maxAge: duration });
@@ -145,6 +141,7 @@ router.get("/me", async (req, res) => {
     authenticated: true,
     needsOnboarding: !session.user,
     user: session.user,
+    avatarUrl: session.identity.picture,
     suggestedHandle: /^[a-z0-9_]{3,32}$/.test(
       session.identity.username.toLowerCase(),
     )
@@ -193,13 +190,16 @@ router.post("/profile", async (req, res) => {
       .update(authIdentities)
       .set({ userId: created.id })
       .where(eq(authIdentities.id, identity.id));
-    return created;
+    return { ...created, avatarUrl: identity.picture };
   });
-  res
-    .status(201)
-    .json({
-      user: { id: user.id, handle: user.handle, displayName: user.displayName },
-    });
+  res.status(201).json({
+    user: {
+      id: user.id,
+      handle: user.handle,
+      displayName: user.displayName,
+      avatarUrl: user.avatarUrl,
+    },
+  });
 });
 router.post("/logout", async (req, res) => {
   requireOrigin(req);

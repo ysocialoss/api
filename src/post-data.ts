@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
-import { postLikes, postReposts, posts, users } from "./db/schema.ts";
+import { postLikes, postReposts, posts } from "./db/schema.ts";
+import { userSelection } from "./user-data.ts";
 
 export const postFields = {
   id: posts.id,
@@ -31,11 +32,7 @@ export const postSelection = (viewerId: string | null) => ({
   ...repostSelection(viewerId),
   ...postFields,
   replies: sql<number>`(select count(*)::int from posts reply where reply.parent_id = ${posts.id})`,
-  author: {
-    id: users.id,
-    handle: users.handle,
-    displayName: users.displayName,
-  },
+  author: userSelection,
 });
 type PostRow = { createdAt: Date };
 export function serializePost<T extends PostRow>(post: T) {

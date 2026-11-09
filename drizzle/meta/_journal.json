@@ -50,6 +50,13 @@
       "when": 1793985531443,
       "tag": "0006_awesome_cardiac",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794229186484,
+      "tag": "0007_silent_rocket_raccoon",
+      "breakpoints": true
     }
   ]
 }

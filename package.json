@@ -5,8 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node src/app.ts",
-    "dev": "node --inspect --watch-path=./ src/app.ts",
-    "test": "node --test tests/*.test.ts",
+    "dev": "node --inspect --watch-path=./ src/app.ts --dev-delay",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",

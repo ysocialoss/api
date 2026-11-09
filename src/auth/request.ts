@@ -29,3 +29,12 @@ export async function readViewerId(req: Request): Promise<string | null> {
     throw error;
   }
 }
+
+export async function requireUser(req: Request) {
+  requireOrigin(req);
+  const session = await readSession(cookie(req, "session"));
+  if (session.kind === "anonymous")
+    throw new AuthError(401, "sign_in_required");
+  if (!session.user) throw new AuthError(403, "onboarding_required");
+  return session.user;
+}

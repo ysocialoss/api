@@ -1,35 +1,64 @@
-import { readViewerId } from "./auth/request.ts";
-import { Router } from "express";
-import { and, desc, eq, inArray, isNull, isNotNull, sql } from "drizzle-orm";
+import { readViewerId, requireUser } from "./auth/request.ts";
+import { Router, type Request } from "express";
+import {
+  and,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  isNotNull,
+  or,
+  sql,
+} from "drizzle-orm";
 import { z } from "zod";
 import { db } from "./db/index.ts";
-import { posts, postReposts, users } from "./db/schema.ts";
+import { posts, postReposts, users, userFollows } from "./db/schema.ts";
 import { AuthError } from "./auth/provider.ts";
 import { postSelection, serializePost } from "./post-data.ts";
+import { userSelection } from "./user-data.ts";
 
 const router = Router();
-router.get("/:handle", async (req, res) => {
+const handleSchema = z.string().regex(/^[a-z0-9_]{3,32}$/);
+router.use((_req, res, next) => {
   res.set("Cache-Control", "no-store");
-  if (
-    !z
-      .string()
-      .regex(/^[a-z0-9_]{3,32}$/)
-      .safeParse(req.params.handle).success
-  ) {
+  next();
+});
+router.get("/:handle", async (req, res) => {
+  if (!handleSchema.safeParse(req.params.handle).success) {
     throw new AuthError(404, "profile_not_found");
   }
   const [profile] = await db
     .select({
-      id: users.id,
-      handle: users.handle,
-      displayName: users.displayName,
+      ...userSelection,
       bio: users.bio,
       createdAt: users.createdAt,
+      followerCount: sql<number>`(select count(*)::int from ${userFollows} where ${userFollows.followingId} = ${users.id})`,
+      followingCount: sql<number>`(select count(*)::int from ${userFollows} where ${userFollows.followerId} = ${users.id})`,
     })
     .from(users)
     .where(eq(users.handle, req.params.handle));
   if (!profile) throw new AuthError(404, "profile_not_found");
   const viewerId = await readViewerId(req);
+  const relationships = viewerId
+    ? await db
+        .select({
+          followerId: userFollows.followerId,
+          followingId: userFollows.followingId,
+        })
+        .from(userFollows)
+        .where(
+          or(
+            and(
+              eq(userFollows.followerId, viewerId),
+              eq(userFollows.followingId, profile.id),
+            ),
+            and(
+              eq(userFollows.followerId, profile.id),
+              eq(userFollows.followingId, viewerId),
+            ),
+          ),
+        )
+    : [];
   const recent = await db
     .select(postSelection(viewerId))
     .from(posts)
@@ -89,6 +118,12 @@ router.get("/:handle", async (req, res) => {
   );
   res.json({
     profile,
+    isFollowing: relationships.some(
+      (relationship) => relationship.followerId === viewerId,
+    ),
+    isFollowedBy: relationships.some(
+      (relationship) => relationship.followingId === viewerId,
+    ),
     posts: recent.map(serializePost),
     reposts: reposts.map(serializePost),
     replies: replies.map((post) => ({
@@ -102,5 +137,60 @@ router.get("/:handle", async (req, res) => {
     })),
     serverNow: new Date().toISOString(),
   });
+});
+async function setFollow(req: Request, follow: boolean) {
+  const viewer = await requireUser(req);
+  const handle = handleSchema.safeParse(req.params.handle);
+  if (!handle.success) throw new AuthError(404, "profile_not_found");
+  return db.transaction(async (tx) => {
+    // Serialize updates for this profile so retries return a consistent count.
+    const [target] = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.handle, handle.data))
+      .for("no key update");
+    if (!target) throw new AuthError(404, "profile_not_found");
+    if (target.id === viewer.id) throw new AuthError(400, "cannot_follow_self");
+    if (follow) {
+      await tx
+        .insert(userFollows)
+        .values({ followerId: viewer.id, followingId: target.id })
+        .onConflictDoNothing();
+    } else {
+      await tx
+        .delete(userFollows)
+        .where(
+          and(
+            eq(userFollows.followerId, viewer.id),
+            eq(userFollows.followingId, target.id),
+          ),
+        );
+    }
+    const [count] = await tx
+      .select({ followerCount: sql<number>`count(*)::int` })
+      .from(userFollows)
+      .where(eq(userFollows.followingId, target.id));
+    const [followsViewer] = await tx
+      .select({ followerId: userFollows.followerId })
+      .from(userFollows)
+      .where(
+        and(
+          eq(userFollows.followerId, target.id),
+          eq(userFollows.followingId, viewer.id),
+        ),
+      )
+      .limit(1);
+    return {
+      isFollowing: follow,
+      isFollowedBy: !!followsViewer,
+      followerCount: count.followerCount,
+    };
+  });
+}
+router.put("/:handle/follow", async (req, res) => {
+  res.json(await setFollow(req, true));
+});
+router.delete("/:handle/follow", async (req, res) => {
+  res.json(await setFollow(req, false));
 });
 export default router;

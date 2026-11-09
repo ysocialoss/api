@@ -1,3 +1,7 @@
+# API
+
+See the [route reference](docs/README.md) for implemented endpoints, models, errors, and web integration. Run `node scripts/check-docs.mjs` to verify route documentation coverage.
+
 ## Run the backend locally
 
 The backend uses Drizzle ORM and PostgreSQL. Start the database from the project root with `docker compose up -d --wait`.
@@ -16,6 +20,8 @@ Save the generated value as `SESSION_ENCRYPTION_KEY` in `.env`, then run:
 pnpm db:migrate
 pnpm dev
 ```
+
+`pnpm dev` adds a one-second delay to `/api/*` requests to make pending UI states visible. Normal starts have no artificial delay. See [development delay](docs/development-delay.md).
 
 A local encryption key is already configured in this working copy. Keep it private and stable across restarts. Changing it invalidates stored encrypted tokens. `.env` is ignored by Git.
 
@@ -53,159 +59,8 @@ Run `pnpm auth:reconcile` daily through your scheduler to refresh cached CNS pro
 
 ```bash
 pnpm typecheck
-pnpm test
 ```
 
-Tests require a migrated local PostgreSQL database. They use a local HTTP provider with signed RSA tokens, never the live CNS API, and remove the accounts they create. They cover PKCE, callback state and replay, token validation, onboarding races, returning accounts, encrypted tokens, concurrent refreshes, temporary provider failure, revocation, and logout.
-
-From `web/`, run `pnpm build`, `pnpm check:routes`, and `pnpm check:auth`. The auth checks use a local mock backend. Live CNS login and provider contract verification are left to the operator.
+From `web/`, run `pnpm build`. Live CNS login and provider contract verification are left to the operator.
 
 After changing `src/db/schema.ts`, generate and apply migrations with `pnpm db:generate` and `pnpm db:migrate`.
-
----
-
-what do we need?
-
-- auth
-  - we looove cns accounts
-- user profiles
-  - customization (colour, banner gif + img, avatar gif + img)
-- communities
-  - seperated from main feed
-  - tags (similar to discord)
-    ~- posts
-    ~ - types (voice, live irc type shi, images, video, _streams_)
-- *chats
-  - dm & group messages ENCRYPTION
-
-api brainstorm
-base: ysocial.cc/api/
-
-POST /post
-
-```json
-{
-  "content": "message",
-  "type": "text" || "image" || "gif" || "video" || "voice" || "live" || "streams",
-  "scheduled": "unixtimestamp" // must be at least 10min from now
-}
-```
-
-example of a live post scheduled to post on Wed, 28 Oct 2026 23:00:00 GMT:
-
-```json
-{
-  "content": "This is a post!",
-  "type": "live",
-  "scheduled": "1793228400" // Wed, 28 Oct 2026 23:00:00 GMT
-}
-```
-
-GET /post/<uuid>
-response:
-
-```json
-{
-  "date": "unixtimestamp",
-  "author": "string", // uuid from user
-  "likes": "int",
-  "dislikes": "int",
-  "reposts": "int",
-  "content": "string", // allowed empty
-  "image": "uuid", // optional
-  "gif": "uuid", // optional
-  "video": "uuid", // optional
-  "voice": "uuid", // optional
-  "realtime": "uuid", // optional
-  "stream": "uuid" // optional
-}
-```
-
-example:
-
-```json
-{
-  "date": "1793228400", // Posted on Wed, 28 Oct 2026 23:00:00 GMT
-  "author": "3ee7adf2-bb29-4b3f-998e-464dc8d307b9", // uuid of user @whz
-  "likes": "2",
-  "dislikes": "9",
-  "reposts": "1",
-  "content": "This is my Post!", // allowed empty
-  "image": "ca9e94a0-5ff0-4bb8-9f7a-ff020d5d80cb" // optional
-  // "gif": "uuid",        // optional
-  // "video": "uuid",      // optional
-  // "voice": "uuid",      // optional
-  // "realtime": "uuid",   // optional
-  // "stream": "uuid",     // optional
-}
-```
-
-GET /communities/create
-request:
-
-```json
-{
-  "name": "string",
-  "avatar": "file",
-  "banner": "file",
-  ""
-}
-```
-
-response:
-
-```json
-{
-  "uuid": "uuid",
-  "name": "string"
-  "avatar": "uuid",
-  "banner": "uuid",
-}
-```
-
-GET /communities/feed/<uuid>
-response:
-
-```json
-{
-  "uuid": {
-    {
-      "date": "unixtimestamp",
-      "author": "string",   // uuid of user
-      "likes": "int",
-      "dislikes": "int",
-      "reposts": "int",
-      "content": "string",  // allowed empty
-      "image": "uuid",      // optional
-      "gif": "uuid",        // optional
-      "video": "uuid",      // optional
-      "voice": "uuid",      // optional
-      "realtime": "uuid",   // optional
-      "stream": "uuid",     // optional
-    }
-  }
-}
-```
-
-example:
-
-```json
-{
-  "ac8d7b9a-d677-4cae-a9b1-f5abc400fac9": {
-    "date": "1793314800", // Thu, 29 Oct 2026 23:00:00 GMT
-    "author": "3e4b6dd3-255b-455c-a374-7f40df52a4b1",
-    "likes": "1",
-    "dislikes": "0",
-    "reposts": "0",
-    "content": "What's a community?"
-  },
-  "c578a641-264d-4a9d-bd46-104cc60befe4": {
-    "date": "1793401200", // Fri, 30 Oct 2026 23:00:00 GMT
-    "author": "54617a84-d930-45d3-b5f7-a608a3dc2230",
-    "likes": "0",
-    "dislikes": "0",
-    "reposts": "0",
-    "content": "a"
-  }
-}
-```

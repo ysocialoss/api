@@ -4,6 +4,7 @@ import { authSessions, authIdentities, users } from "../db/schema.ts";
 import { env } from "../config.ts";
 import { AuthError, providerPost, tokensSchema } from "./provider.ts";
 import { decrypt, encrypt, hash } from "./secrets.ts";
+import { userSelection } from "../user-data.ts";
 
 export function readSession(token: string) {
   return readSessionHash(hash(token));
@@ -80,11 +81,7 @@ export async function readSessionHash(tokenHash: string) {
     }
     const [user] = identity.userId
       ? await tx
-          .select({
-            id: users.id,
-            handle: users.handle,
-            displayName: users.displayName,
-          })
+          .select(userSelection)
           .from(users)
           .where(eq(users.id, identity.userId))
       : [];

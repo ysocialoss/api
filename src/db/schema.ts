@@ -148,3 +148,26 @@ export const postReposts = pgTable(
     ),
   ],
 );
+
+export const userFollows = pgTable(
+  "user_follows",
+  {
+    followerId: uuid("follower_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    followingId: uuid("following_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.followerId, table.followingId] }),
+    index("user_follows_following_idx").on(table.followingId),
+    check(
+      "user_follows_not_self",
+      sql`${table.followerId} <> ${table.followingId}`,
+    ),
+  ],
+);

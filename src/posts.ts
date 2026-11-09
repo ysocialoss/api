@@ -10,8 +10,7 @@ import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "./db/index.ts";
 import { postLikes, postReposts, posts, users } from "./db/schema.ts";
-import { cookie, requireOrigin, readViewerId } from "./auth/request.ts";
-import { readSession } from "./auth/session.ts";
+import { requireUser, readViewerId } from "./auth/request.ts";
 import { AuthError } from "./auth/provider.ts";
 
 const router = Router();
@@ -25,6 +24,7 @@ const contentSchema = z.strictObject({
       return length > 0 && length <= 2000;
     }),
 });
+const createSchema = contentSchema.extend({ clientId: z.uuid().optional() });
 const cursorSchema = z.strictObject({
   createdAt: z.iso.datetime(),
   id: z.uuid(),
@@ -37,6 +37,56 @@ async function findPost(id: string, viewerId: string | null = null) {
     .where(eq(posts.id, id));
   if (!post) throw new AuthError(404, "post_not_found");
   return serializePost(post);
+}
+async function createPost({
+  userId,
+  input,
+  parentId = null,
+}: {
+  userId: string;
+  input: z.infer<typeof createSchema>;
+  parentId?: string | null;
+}) {
+  const id = await db.transaction(async (tx) => {
+    if (parentId) {
+      const [parent] = await tx
+        .select({ id: posts.id })
+        .from(posts)
+        .where(eq(posts.id, parentId))
+        .for("key share");
+      if (!parent) throw new AuthError(404, "post_not_found");
+    }
+    const [saved] = await tx
+      .insert(posts)
+      .values({
+        id: input.clientId,
+        authorId: userId,
+        content: input.content,
+        parentId,
+      })
+      .onConflictDoNothing({ target: posts.id })
+      .returning({ id: posts.id });
+    if (saved) return saved.id;
+    if (!input.clientId) throw new Error("Post ID collision");
+    const [existing] = await tx
+      .select({
+        id: posts.id,
+        authorId: posts.authorId,
+        parentId: posts.parentId,
+        content: posts.content,
+      })
+      .from(posts)
+      .where(eq(posts.id, input.clientId));
+    if (
+      !existing ||
+      existing.authorId !== userId ||
+      existing.parentId !== parentId ||
+      existing.content !== input.content
+    )
+      throw new AuthError(409, "post_id_conflict");
+    return existing.id;
+  });
+  return findPost(id, userId);
 }
 router.use((_req, res, next) => {
   res.set("Cache-Control", "no-store");
@@ -96,32 +146,12 @@ const listPosts: import("express").RequestHandler = async (req, res) => {
   });
 };
 router.get("/", listPosts);
-async function requireUser(req: Request) {
-  requireOrigin(req);
-  const session = await readSession(cookie(req, "session"));
-  if (session.kind === "anonymous")
-    throw new AuthError(401, "sign_in_required");
-  if (!session.user) throw new AuthError(403, "onboarding_required");
-  return session.user;
-}
 router.post("/", async (req, res) => {
   const user = await requireUser(req);
-  const parsed = contentSchema.safeParse(req.body);
+  const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) throw new AuthError(400, "invalid_content");
-  const [post] = await db
-    .insert(posts)
-    .values({ authorId: user.id, content: parsed.data.content })
-    .returning(postFields);
   res.status(201).json({
-    post: serializePost({
-      ...post,
-      author: user,
-      likes: 0,
-      liked: false,
-      replies: 0,
-      reposts: 0,
-      reposted: false,
-    }),
+    post: await createPost({ userId: user.id, input: parsed.data }),
     serverNow: new Date().toISOString(),
   });
 });
@@ -139,34 +169,13 @@ router.get("/:id", async (req, res) => {
 router.get("/:id/replies", listPosts);
 router.post("/:id/replies", async (req, res) => {
   const user = await requireUser(req);
-  const parsed = contentSchema.safeParse(req.body);
+  const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) throw new AuthError(400, "invalid_content");
-  const post = await db.transaction(async (tx) => {
-    const [parent] = await tx
-      .select({ id: posts.id })
-      .from(posts)
-      .where(eq(posts.id, req.params.id))
-      .for("key share");
-    if (!parent) throw new AuthError(404, "post_not_found");
-    const [saved] = await tx
-      .insert(posts)
-      .values({
-        authorId: user.id,
-        content: parsed.data.content,
-        parentId: parent.id,
-      })
-      .returning(postFields);
-    return saved;
-  });
   res.status(201).json({
-    post: serializePost({
-      ...post,
-      author: user,
-      likes: 0,
-      liked: false,
-      replies: 0,
-      reposts: 0,
-      reposted: false,
+    post: await createPost({
+      userId: user.id,
+      input: parsed.data,
+      parentId: req.params.id,
     }),
     serverNow: new Date().toISOString(),
   });

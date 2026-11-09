@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import profiles from "./profiles.ts";
 import posts from "./posts.ts";
 import { AuthError } from "./auth/provider.ts";
@@ -14,6 +15,12 @@ app.post("/webhooks/cns", (_req, res) => {
   res.status(503).json({ error: "webhooks_not_configured" });
 });
 app.use(express.json({ limit: "16kb" }));
+if (env.NODE_ENV === "development" && process.argv.includes("--dev-delay")) {
+  app.use("/api", async (_req, _res, next) => {
+    await delay(1000);
+    next();
+  });
+}
 app.use("/auth", auth);
 app.use("/api/posts", posts);
 app.use("/api/profiles", profiles);
@@ -59,6 +66,7 @@ if (import.meta.main) {
       to_regclass('public.post_likes') IS NOT NULL AND
       to_regclass('public.posts') IS NOT NULL AND
       to_regclass('public.users') IS NOT NULL AND
+      to_regclass('public.user_follows') IS NOT NULL AND
       to_regclass('public.auth_sessions') IS NOT NULL AND
       to_regclass('public.auth_identities') IS NOT NULL AND
       to_regclass('public.oauth_transactions') IS NOT NULL AS ready`);
