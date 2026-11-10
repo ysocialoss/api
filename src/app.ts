@@ -1,4 +1,3 @@
-import { setTimeout as delay } from "node:timers/promises";
 import profiles from "./profiles.ts";
 import posts from "./posts.ts";
 import { AuthError } from "./auth/provider.ts";
@@ -15,12 +14,6 @@ app.post("/webhooks/cns", (_req, res) => {
   res.status(503).json({ error: "webhooks_not_configured" });
 });
 app.use(express.json({ limit: "16kb" }));
-if (env.NODE_ENV === "development" && process.argv.includes("--dev-delay")) {
-  app.use("/api", async (_req, _res, next) => {
-    await delay(1000);
-    next();
-  });
-}
 app.use("/auth", auth);
 app.use("/api/posts", posts);
 app.use("/api/profiles", profiles);
