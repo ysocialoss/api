@@ -9,7 +9,9 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "auth:reconcile": "node src/auth/reconcile.ts"
+    "auth:reconcile": "node src/auth/reconcile.ts",
+    "test:avatars": "node --test tests/avatars.test.mjs",
+    "storage:prune": "node scripts/prune-avatars.ts"
   },
   "keywords": [],
   "author": "",
@@ -24,11 +26,13 @@
   "packageManager": "pnpm@12.16.1",
   "type": "module",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1165.0",
     "dotenv": "^18.0.9",
     "drizzle-orm": "^0.45.4",
     "express": "^5.3.0",
     "jose": "^6.2.14",
     "pg": "^8.23.1",
+    "sharp": "^0.35.5",
     "zod": "^4.6.7"
   },
   "devDependencies": {

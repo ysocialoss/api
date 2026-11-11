@@ -31,6 +31,10 @@ router.get("/:handle", async (req, res) => {
     .select({
       ...userSelection,
       bio: users.bio,
+      bannerCrop: users.bannerCrop,
+      bannerUrl: sql<
+        string | null
+      >`case when ${users.bannerKey} is null then ${users.bannerExternalUrl} else '/api/' || ${users.bannerKey} end`,
       createdAt: users.createdAt,
       followerCount: sql<number>`(select count(*)::int from ${userFollows} where ${userFollows.followingId} = ${users.id})`,
       followingCount: sql<number>`(select count(*)::int from ${userFollows} where ${userFollows.followerId} = ${users.id})`,

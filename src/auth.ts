@@ -141,7 +141,7 @@ router.get("/me", async (req, res) => {
     authenticated: true,
     needsOnboarding: !session.user,
     user: session.user,
-    avatarUrl: session.identity.picture,
+    avatarUrl: session.user?.avatarUrl ?? session.identity.picture,
     suggestedHandle: /^[a-z0-9_]{3,32}$/.test(
       session.identity.username.toLowerCase(),
     )

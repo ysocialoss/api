@@ -1,8 +1,10 @@
+import type { BannerCrop } from "../storage/banner-crop.ts";
 import { sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
   check,
   integer,
+  jsonb,
   index,
   unique,
   pgTable,
@@ -19,6 +21,10 @@ export const users = pgTable(
     handle: text().notNull().unique("users_handle_unique"),
     displayName: text("display_name").notNull().default(""),
     bio: text().notNull().default(""),
+    avatarKey: text("avatar_key"),
+    bannerKey: text("banner_key"),
+    bannerCrop: jsonb("banner_crop").$type<BannerCrop>(),
+    bannerExternalUrl: text("banner_external_url"),
     colour: text().notNull().default("#808080"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -170,4 +176,17 @@ export const userFollows = pgTable(
       sql`${table.followerId} <> ${table.followingId}`,
     ),
   ],
+);
+
+// Durable outbox for replacements, removals, and unfinished uploads.
+export const mediaDeletions = pgTable(
+  "media_deletions",
+  {
+    key: text().primaryKey(),
+    availableAt: timestamp("available_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    attempts: integer().notNull().default(0),
+  },
+  (table) => [index("media_deletions_due_idx").on(table.availableAt)],
 );

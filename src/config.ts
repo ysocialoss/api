@@ -1,10 +1,13 @@
 import { config } from "dotenv";
 import { z } from "zod";
+import { r2ConfigSchema } from "./storage/r2-config.ts";
 
 config({ path: new URL("../.env", import.meta.url), quiet: true });
 
 export const env = z
   .object({
+    KLIPY_API_KEY: z.string().optional(),
+    R2: z.preprocess(() => process.env, r2ConfigSchema),
     DATABASE_URL: z
       .url()
       .refine(

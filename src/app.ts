@@ -1,3 +1,7 @@
+import { startMediaCleanup } from "./storage/media-lifecycle.ts";
+import banners from "./banners.ts";
+import avatars from "./avatars.ts";
+import { checkAvatarStorage } from "./storage/r2.ts";
 import profiles from "./profiles.ts";
 import posts from "./posts.ts";
 import { AuthError } from "./auth/provider.ts";
@@ -17,6 +21,8 @@ app.use(express.json({ limit: "16kb" }));
 app.use("/auth", auth);
 app.use("/api/posts", posts);
 app.use("/api/profiles", profiles);
+app.use("/api/avatars", avatars);
+app.use("/api/banners", banners);
 
 app.get("/", (_req, res) => {
   res.send("Hello World!");
@@ -57,8 +63,10 @@ if (import.meta.main) {
   try {
     const schema = await pool.query<{ ready: boolean }>(`SELECT
       to_regclass('public.post_likes') IS NOT NULL AND
+      to_regclass('public.media_deletions') IS NOT NULL AND
       to_regclass('public.posts') IS NOT NULL AND
       to_regclass('public.users') IS NOT NULL AND
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'banner_crop') AND
       to_regclass('public.user_follows') IS NOT NULL AND
       to_regclass('public.auth_sessions') IS NOT NULL AND
       to_regclass('public.auth_identities') IS NOT NULL AND
@@ -68,11 +76,14 @@ if (import.meta.main) {
         "Database schema is missing. Run pnpm db:migrate in api/ before starting the API.",
       );
     }
+    if (env.R2) await checkAvatarStorage();
+    const stopMediaCleanup = startMediaCleanup();
     const server = app.listen(env.PORT, () =>
       console.info(`API listening on port ${env.PORT}`),
     );
     for (const signal of ["SIGINT", "SIGTERM"]) {
       process.once(signal, () => {
+        stopMediaCleanup();
         server.close(() => {
           void pool.end();
         });
@@ -80,7 +91,7 @@ if (import.meta.main) {
     }
   } catch (error) {
     console.error(
-      "Could not connect to PostgreSQL. Check DATABASE_URL and start the database.",
+      "API startup failed. Check database migrations and EU R2 configuration.",
       error,
     );
     await pool.end();
