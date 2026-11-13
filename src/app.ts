@@ -31,7 +31,7 @@ app.use("/api/avatars", avatars);
 app.use("/api/banners", banners);
 
 app.get("/", (_req, res) => {
-  res.redirect("https://docs.ysocial.cc/")
+  res.redirect("https://docs.ysocial.cc/");
 });
 
 const handleError: ErrorRequestHandler = (error: unknown, _req, res, _next) => {
