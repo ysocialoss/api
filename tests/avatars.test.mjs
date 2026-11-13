@@ -513,7 +513,7 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
           assert.equal(queued.attempts, 1);
           failDeletes = false;
           await pool.query(
-            "UPDATE media_deletions SET available_at = now() WHERE key = $1",
+            "UPDATE media_deletions SET available_at = now() - interval '1 second' WHERE key = $1",
             [old],
           );
           await flushMediaDeletions();
