@@ -11,7 +11,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:migrate:run": "node src/db/migrate.ts",
     "auth:reconcile": "node src/auth/reconcile.ts",
-    "test": "node --test tests/",
+    "test": "node --test \"tests/**/*.test.mjs\"",
     "test:avatars": "node --test tests/avatars.test.mjs",
     "test:health": "node --test tests/health.test.mjs",
     "storage:prune": "node scripts/prune-avatars.ts"
