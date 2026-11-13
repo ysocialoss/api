@@ -11,6 +11,7 @@
     "db:migrate": "drizzle-kit migrate",
     "auth:reconcile": "node src/auth/reconcile.ts",
     "test:avatars": "node --test tests/avatars.test.mjs",
+    "test:health": "node --test tests/health.test.mjs",
     "storage:prune": "node scripts/prune-avatars.ts"
   },
   "keywords": [],

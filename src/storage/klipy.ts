@@ -37,8 +37,6 @@ const envelope = z.object({
     has_next: z.boolean().optional(),
   }),
 });
-let windowStart = Date.now(),
-  calls = 0;
 function key() {
   if (!env.KLIPY_API_KEY) throw new AuthError(503, "klipy_not_configured");
   return env.KLIPY_API_KEY;
@@ -48,12 +46,6 @@ function signature(payload: string) {
 }
 export async function searchGifs(query: string, page: number, userId: string) {
   const apiKey = key();
-  if (Date.now() - windowStart > 3600000) {
-    windowStart = Date.now();
-    calls = 0;
-  }
-  if (calls >= 90) throw new AuthError(429, "gif_search_limit");
-  calls++;
   const url = new URL(
     `https://api.klipy.com/api/v1/${apiKey}/gifs/${query ? "search" : "trending"}`,
   );

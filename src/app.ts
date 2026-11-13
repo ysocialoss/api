@@ -1,3 +1,4 @@
+import { createHealthRouter } from "./health.ts";
 import { startMediaCleanup } from "./storage/media-lifecycle.ts";
 import banners from "./banners.ts";
 import avatars from "./avatars.ts";
@@ -13,10 +14,7 @@ import { env } from "./config.ts";
 
 export const app = express();
 
-// for health checks
-app.get("/health", (_req, res) => {
-  res.status(200).json({ status: "ok" });
-});
+app.use(createHealthRouter());
 
 // The provider has not supplied its webhook envelope or timestamp header contract.
 // Do not acknowledge delivery until signature verification can be implemented.
