@@ -4,7 +4,7 @@ import { db } from "../db/index.ts";
 import { users, mediaDeletions } from "../db/schema.ts";
 import { requireAvatarStorage } from "./r2.ts";
 
-export async function sweepUnusedMedia(remove = false) {
+export async function sweepUnusedMedia(remove = false, database = db) {
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
   const { client, bucket } = requireAvatarStorage();
   let unused = 0;
@@ -33,7 +33,7 @@ export async function sweepUnusedMedia(remove = false) {
           : [],
       );
       const saved = candidates.length
-        ? await db
+        ? await database
             .select({ key: media.column })
             .from(users)
             .where(inArray(media.column, candidates))
@@ -42,7 +42,7 @@ export async function sweepUnusedMedia(remove = false) {
       for (const key of candidates) {
         if (active.has(key)) continue;
         if (remove)
-          await db.insert(mediaDeletions).values({ key }).onConflictDoNothing();
+          await database.insert(mediaDeletions).values({ key }).onConflictDoNothing();
         unused++;
       }
       continuationToken = page.IsTruncated

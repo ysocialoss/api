@@ -1,4 +1,4 @@
-import { createHealthRouter } from "./health.ts";
+import { beginDraining, createHealthRouter, isDraining } from "./health.ts";
 import { startMediaCleanup } from "./storage/media-lifecycle.ts";
 import banners from "./banners.ts";
 import avatars from "./avatars.ts";
@@ -16,6 +16,10 @@ import { env } from "./config.ts";
 export const app = express();
 
 let startupReady = !import.meta.main;
+app.use((_req, res, next) => {
+  if (isDraining()) res.set("Connection", "close");
+  next();
+});
 app.use(createHealthRouter(() => startupReady));
 app.use((req, res, next) => {
   if (!startupReady && (req.path.startsWith("/api/") || req.path.startsWith("/auth"))) {
@@ -78,16 +82,28 @@ if (import.meta.main) {
   const server = app.listen(env.PORT, () =>
     console.info(`API listening on port ${env.PORT}`),
   );
+  let stopping = false;
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.once(signal, () => {
+      if (stopping) return;
+      stopping = true;
+      beginDraining();
       startupReady = false;
       shutdown.abort();
       stopMediaCleanup();
-      server.close(() => { void pool.end(); });
+      setTimeout(() => {
+        server.close(() => { void pool.end(); });
+        server.closeIdleConnections();
+        setTimeout(() => {
+          server.closeAllConnections();
+          process.exit(0);
+        }, env.SHUTDOWN_TIMEOUT_MS).unref();
+      }, env.SHUTDOWN_DRAIN_MS);
     });
   }
   try {
     await connectWithRetry(pool, shutdown.signal);
+    shutdown.signal.throwIfAborted();
     const schema = await pool.query<{ ready: boolean }>(`SELECT
       to_regclass('public.post_likes') IS NOT NULL AND
       to_regclass('public.media_deletions') IS NOT NULL AND

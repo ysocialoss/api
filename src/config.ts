@@ -38,6 +38,15 @@ export const env = z
       .enum(["development", "test", "production"])
       .default("development"),
     PORT: z.coerce.number().int().min(1).max(65535).default(3100),
+    // per replica. keep replicas * DATABASE_POOL_MAX below max_connections.
+    DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
+    DATABASE_STATEMENT_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(1000)
+      .default(30_000),
+    SHUTDOWN_DRAIN_MS: z.coerce.number().int().min(0).max(60_000).default(0),
+    SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).default(20_000),
   })
   .parse(process.env);
 

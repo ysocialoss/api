@@ -16,6 +16,8 @@ test("HTTP probes stay available while startup retries the database", { timeout:
       ...process.env,
       NODE_ENV: "test", PORT: String(port),
       DATABASE_URL: "postgres://test:test@127.0.0.1:1/test",
+      SHUTDOWN_DRAIN_MS: "2000",
+      SHUTDOWN_TIMEOUT_MS: "1000",
       R2_ACCOUNT_ID: "", R2_BUCKET: "", R2_ACCESS_KEY_ID: "", R2_SECRET_ACCESS_KEY: "",
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -34,8 +36,25 @@ test("HTTP probes stay available while startup retries the database", { timeout:
     assert.equal((await ready.json()).checks.database.status, "unavailable");
     assert.equal((await request("/api/posts")).status, 503);
     assert.equal((await request("/live")).status, 200);
+    if (process.platform !== "win32") {
+      const exited = once(child, "exit");
+      child.kill("SIGTERM");
+      let draining;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        draining = await request("/ready");
+        if ((await draining.json()).status === "draining") break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(draining.status, 503);
+      assert.equal(draining.headers.get("connection"), "close");
+      assert.equal((await request("/live")).status, 200);
+      assert.deepEqual(await exited, [0, null]);
+    }
   } finally {
-    child.kill();
-    await once(child, "exit");
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, "exit");
+      child.kill();
+      await exited;
+    }
   }
 });
