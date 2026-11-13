@@ -1,4 +1,5 @@
-import { Router } from "express"; import { HeadBucketCommand } from "@aws-sdk/client-s3";
+import { Router } from "express";
+import { HeadBucketCommand } from "@aws-sdk/client-s3";
 import { importJWK } from "jose";
 import type { QueryConfig } from "pg";
 import { z } from "zod";
@@ -67,7 +68,7 @@ export function beginDraining() {
 }
 export const isDraining = () => draining;
 
-export function createHealthRouter() {
+export function createHealthRouter(isStartupReady = () => true) {
   const router = Router();
   const database = cachedCheck(15_000, async () => {
     // Pool acquisition is separately bounded by connectionTimeoutMillis.
@@ -148,8 +149,13 @@ export function createHealthRouter() {
       return;
     }
     const result = await database();
-    res.status(result.status === "ok" ? 200 : 503).json({
-      status: result.status === "ok" ? "ok" : "unavailable",
+    if (draining) {
+      res.status(503).json({ status: "draining" });
+      return;
+    }
+    const ready = isStartupReady() && result.status === "ok";
+    res.status(ready ? 200 : 503).json({
+      status: ready ? "ok" : "unavailable",
       checks: { database: result },
     });
   });
@@ -158,7 +164,7 @@ export function createHealthRouter() {
       database(), r2(), klipy(), cns(),
     ]);
     const checks = { database: dbResult, r2: r2Result, klipy: klipyResult, cns: cnsResult };
-    const ready = dbResult.status === "ok";
+    const ready = !draining && isStartupReady() && dbResult.status === "ok";
     res.status(ready ? 200 : 503).json({
       status: !ready ? "unavailable" : Object.values(checks).every(
         (check) => check.status === "ok",

@@ -22,7 +22,7 @@ COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src
 COPY scripts ./scripts
-# migrations run from this image ((initContainer: node src/db/migrate.ts)
+# Migrations run from this image: node src/db/migrate.ts.
 COPY drizzle ./drizzle
 USER node
 EXPOSE 3100

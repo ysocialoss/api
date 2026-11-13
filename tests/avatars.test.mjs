@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHmac, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { once } from "node:events";
+import { fileURLToPath } from "node:url";
 import { Readable } from "node:stream";
 import test from "node:test";
 import { config } from "dotenv";
@@ -111,7 +112,7 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
   }
   try {
     await migrate(db, {
-      migrationsFolder: new URL("../drizzle", import.meta.url).pathname,
+      migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)),
     });
     const {
       rows: [alice],

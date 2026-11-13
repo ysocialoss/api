@@ -10,16 +10,24 @@ import express, { type ErrorRequestHandler } from "express";
 import pg from "pg";
 import auth from "./auth.ts";
 import { pool } from "./db/index.ts";
+import { connectWithRetry } from "./db/connect.ts";
 import { env } from "./config.ts";
 
 export const app = express();
 
-// wwhile draining, tell keep-alive clients to reconnect elsewhere.
+let startupReady = !import.meta.main;
 app.use((_req, res, next) => {
   if (isDraining()) res.set("Connection", "close");
   next();
 });
-app.use(createHealthRouter());
+app.use(createHealthRouter(() => startupReady));
+app.use((req, res, next) => {
+  if (!startupReady && (req.path.startsWith("/api/") || req.path.startsWith("/auth"))) {
+    res.status(503).json({ error: "API is starting" });
+    return;
+  }
+  next();
+});
 
 // The provider has not supplied its webhook envelope or timestamp header contract.
 // Do not acknowledge delivery until signature verification can be implemented.
@@ -69,7 +77,33 @@ const handleError: ErrorRequestHandler = (error: unknown, _req, res, _next) => {
 app.use(handleError);
 
 if (import.meta.main) {
+  const shutdown = new AbortController();
+  let stopMediaCleanup = () => {};
+  const server = app.listen(env.PORT, () =>
+    console.info(`API listening on port ${env.PORT}`),
+  );
+  let stopping = false;
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.once(signal, () => {
+      if (stopping) return;
+      stopping = true;
+      beginDraining();
+      startupReady = false;
+      shutdown.abort();
+      stopMediaCleanup();
+      setTimeout(() => {
+        server.close(() => { void pool.end(); });
+        server.closeIdleConnections();
+        setTimeout(() => {
+          server.closeAllConnections();
+          process.exit(0);
+        }, env.SHUTDOWN_TIMEOUT_MS).unref();
+      }, env.SHUTDOWN_DRAIN_MS);
+    });
+  }
   try {
+    await connectWithRetry(pool, shutdown.signal);
+    shutdown.signal.throwIfAborted();
     const schema = await pool.query<{ ready: boolean }>(`SELECT
       to_regclass('public.post_likes') IS NOT NULL AND
       to_regclass('public.media_deletions') IS NOT NULL AND
@@ -86,36 +120,18 @@ if (import.meta.main) {
       );
     }
     if (env.R2) await checkAvatarStorage();
-    const stopMediaCleanup = startMediaCleanup();
-    const server = app.listen(env.PORT, () =>
-      console.info(`API listening on port ${env.PORT}`),
-    );
-    let stopping = false;
-    for (const signal of ["SIGINT", "SIGTERM"]) {
-      process.once(signal, () => {
-        if (stopping) return;
-        stopping = true;
-        beginDraining();
-        stopMediaCleanup();
-        setTimeout(() => {
-          server.close(() => {
-            void pool.end();
-          });
-          server.closeIdleConnections();
-          // in-flihght requests get SHUTDOWN_TIMEOUT_MS, then are cut off lol
-          setTimeout(() => {
-            server.closeAllConnections();
-            process.exit(0);
-          }, env.SHUTDOWN_TIMEOUT_MS).unref();
-        }, env.SHUTDOWN_DRAIN_MS);
-      });
-    }
+    shutdown.signal.throwIfAborted();
+    stopMediaCleanup = startMediaCleanup();
+    startupReady = true;
   } catch (error) {
-    console.error(
-      "API startup failed. Check database migrations and EU R2 configuration.",
-      error,
-    );
-    await pool.end();
-    process.exitCode = 1;
+    if (!shutdown.signal.aborted) {
+      console.error(
+        "API startup failed. Check database migrations and EU R2 configuration.",
+        error,
+      );
+      server.close();
+      await pool.end();
+      process.exitCode = 1;
+    }
   }
 }

@@ -10,5 +10,7 @@ export const pool = new pg.Pool({
   idleTimeoutMillis: 30_000,
   statement_timeout: env.DATABASE_STATEMENT_TIMEOUT_MS,
 });
-export const db = drizzle({ client: pool, schema });
+export const createDatabase = (client: pg.Pool | pg.PoolClient) =>
+  drizzle({ client, schema });
+export const db = createDatabase(pool);
 pool.on("error", (error) => console.error("PostgreSQL pool error", error));

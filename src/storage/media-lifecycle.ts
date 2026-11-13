@@ -2,7 +2,7 @@ import type { PoolClient } from "pg";
 import { sweepUnusedMedia } from "./media-sweep.ts";
 import { DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { and, eq, lte, or } from "drizzle-orm";
-import { db, pool } from "../db/index.ts";
+import { createDatabase, db, pool } from "../db/index.ts";
 import { mediaDeletions, users } from "../db/schema.ts";
 import { AuthError } from "../auth/provider.ts";
 import type { BannerCrop } from "./banner-crop.ts";
@@ -90,12 +90,12 @@ export async function replaceProfileMedia(userId: string, media: ProfileMedia) {
   if (previous && previous !== media.key) await flushMediaDeletions(previous);
 }
 
-export async function flushMediaDeletions(key?: string) {
+export async function flushMediaDeletions(key?: string, database = db) {
   if (!avatarStorage) return;
   const { client, bucket } = avatarStorage;
   try {
     for (let processed = 0; processed < 25; processed++) {
-      const found = await db.transaction(async (tx) => {
+      const found = await database.transaction(async (tx) => {
         // Multiple API processes can safely drain the same outbox.
         const [job] = await tx
           .select()
@@ -163,8 +163,9 @@ export function startMediaCleanup() {
         [MEDIA_SWEEP_LOCK],
       );
       if (!rows[0]?.locked) return;
-      await sweepUnusedMedia(true);
-      await flushMediaDeletions();
+      const database = createDatabase(lock);
+      await sweepUnusedMedia(true, database);
+      await flushMediaDeletions(undefined, database);
     } catch {
       console.error({ event: "media_sweep_unavailable" });
     } finally {
