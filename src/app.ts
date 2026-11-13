@@ -12,6 +12,12 @@ import { pool } from "./db/index.ts";
 import { env } from "./config.ts";
 
 export const app = express();
+
+// for health checks
+app.get("/health", (_req, res) => {
+  res.status(200).json({ status: "ok" });
+});
+
 // The provider has not supplied its webhook envelope or timestamp header contract.
 // Do not acknowledge delivery until signature verification can be implemented.
 app.post("/webhooks/cns", (_req, res) => {
