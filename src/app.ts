@@ -1,4 +1,4 @@
-import { createHealthRouter } from "./health.ts";
+import { beginDraining, createHealthRouter, isDraining } from "./health.ts";
 import { startMediaCleanup } from "./storage/media-lifecycle.ts";
 import banners from "./banners.ts";
 import avatars from "./avatars.ts";
@@ -14,6 +14,11 @@ import { env } from "./config.ts";
 
 export const app = express();
 
+// wwhile draining, tell keep-alive clients to reconnect elsewhere.
+app.use((_req, res, next) => {
+  if (isDraining()) res.set("Connection", "close");
+  next();
+});
 app.use(createHealthRouter());
 
 // The provider has not supplied its webhook envelope or timestamp header contract.
@@ -85,12 +90,24 @@ if (import.meta.main) {
     const server = app.listen(env.PORT, () =>
       console.info(`API listening on port ${env.PORT}`),
     );
+    let stopping = false;
     for (const signal of ["SIGINT", "SIGTERM"]) {
       process.once(signal, () => {
+        if (stopping) return;
+        stopping = true;
+        beginDraining();
         stopMediaCleanup();
-        server.close(() => {
-          void pool.end();
-        });
+        setTimeout(() => {
+          server.close(() => {
+            void pool.end();
+          });
+          server.closeIdleConnections();
+          // in-flihght requests get SHUTDOWN_TIMEOUT_MS, then are cut off lol
+          setTimeout(() => {
+            server.closeAllConnections();
+            process.exit(0);
+          }, env.SHUTDOWN_TIMEOUT_MS).unref();
+        }, env.SHUTDOWN_DRAIN_MS);
       });
     }
   } catch (error) {

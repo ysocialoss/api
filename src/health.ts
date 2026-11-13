@@ -1,5 +1,4 @@
-import { Router } from "express";
-import { HeadBucketCommand } from "@aws-sdk/client-s3";
+import { Router } from "express"; import { HeadBucketCommand } from "@aws-sdk/client-s3";
 import { importJWK } from "jose";
 import type { QueryConfig } from "pg";
 import { z } from "zod";
@@ -61,6 +60,12 @@ const klipySchema = z.object({
   result: z.literal(true),
   data: z.object({ data: z.array(z.unknown()) }),
 });
+
+let draining = false;
+export function beginDraining() {
+  draining = true;
+}
+export const isDraining = () => draining;
 
 export function createHealthRouter() {
   const router = Router();
@@ -138,6 +143,10 @@ export function createHealthRouter() {
     res.json({ status: "ok" });
   });
   router.get("/ready", async (_req, res) => {
+    if (draining) {
+      res.status(503).json({ status: "draining" });
+      return;
+    }
     const result = await database();
     res.status(result.status === "ok" ? 200 : 503).json({
       status: result.status === "ok" ? "ok" : "unavailable",
