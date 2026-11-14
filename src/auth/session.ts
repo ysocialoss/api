@@ -1,4 +1,4 @@
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import { authSessions, authIdentities, users } from "../db/schema.ts";
 import { env } from "../config.ts";
@@ -81,7 +81,11 @@ export async function readSessionHash(tokenHash: string) {
     }
     const [user] = identity.userId
       ? await tx
-          .select(userSelection)
+          .select({
+            ...userSelection,
+            bannerCrop: users.bannerCrop,
+            bannerUrl: sql<string | null>`case when ${users.bannerKey} is null then ${users.bannerExternalUrl} else '/api/' || ${users.bannerKey} end`,
+          })
           .from(users)
           .where(eq(users.id, identity.userId))
       : [];
