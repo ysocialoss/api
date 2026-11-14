@@ -6,6 +6,11 @@ import * as schema from "./schema.ts";
 export const pool = new pg.Pool({
   connectionString: env.DATABASE_URL,
   connectionTimeoutMillis: 5000,
+  max: env.DATABASE_POOL_MAX,
+  idleTimeoutMillis: 30_000,
+  statement_timeout: env.DATABASE_STATEMENT_TIMEOUT_MS,
 });
-export const db = drizzle({ client: pool, schema });
+export const createDatabase = (client: pg.Pool | pg.PoolClient) =>
+  drizzle({ client, schema });
+export const db = createDatabase(pool);
 pool.on("error", (error) => console.error("PostgreSQL pool error", error));

@@ -62,6 +62,12 @@ const klipySchema = z.object({
   data: z.object({ data: z.array(z.unknown()) }),
 });
 
+let draining = false;
+export function beginDraining() {
+  draining = true;
+}
+export const isDraining = () => draining;
+
 export function createHealthRouter(isStartupReady = () => true) {
   const router = Router();
   const database = cachedCheck(15_000, async () => {
@@ -138,7 +144,15 @@ export function createHealthRouter(isStartupReady = () => true) {
     res.json({ status: "ok" });
   });
   router.get("/ready", async (_req, res) => {
+    if (draining) {
+      res.status(503).json({ status: "draining" });
+      return;
+    }
     const result = await database();
+    if (draining) {
+      res.status(503).json({ status: "draining" });
+      return;
+    }
     const ready = isStartupReady() && result.status === "ok";
     res.status(ready ? 200 : 503).json({
       status: ready ? "ok" : "unavailable",
@@ -150,7 +164,7 @@ export function createHealthRouter(isStartupReady = () => true) {
       database(), r2(), klipy(), cns(),
     ]);
     const checks = { database: dbResult, r2: r2Result, klipy: klipyResult, cns: cnsResult };
-    const ready = isStartupReady() && dbResult.status === "ok";
+    const ready = !draining && isStartupReady() && dbResult.status === "ok";
     res.status(ready ? 200 : 503).json({
       status: !ready ? "unavailable" : Object.values(checks).every(
         (check) => check.status === "ok",
