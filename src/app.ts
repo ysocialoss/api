@@ -15,6 +15,7 @@ import { startPushDelivery } from "./push-delivery.ts";
 import { AuthError } from "./auth/provider.ts";
 import express, { type ErrorRequestHandler } from "express";
 import pg from "pg";
+import admin from "./admin.ts";
 import auth from "./auth.ts";
 import { pool } from "./db/index.ts";
 import { connectWithRetry } from "./db/connect.ts";
@@ -43,6 +44,7 @@ app.post("/webhooks/cns", (_req, res) => {
 });
 app.use(express.json({ limit: "16kb" }));
 app.use("/auth", auth);
+app.use("/api/admin", admin);
 app.use("/api/posts", posts);
 app.use("/api/live", live);
 app.use("/api/notifications", notifications);
@@ -136,6 +138,7 @@ if (import.meta.main) {
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'posts' AND column_name = 'voice') AND
       to_regclass('public.post_mentions') IS NOT NULL AND
       to_regclass('public.users') IS NOT NULL AND
+      to_regclass('public.user_handles') IS NOT NULL AND
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'notification_prompt_dismissed') AND
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'banner_crop') AND
       to_regclass('public.user_follows') IS NOT NULL AND
@@ -143,6 +146,9 @@ if (import.meta.main) {
       to_regclass('public.push_subscriptions') IS NOT NULL AND
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'push_subscriptions' AND column_name = 'muted_forever') AND
       to_regclass('public.push_deliveries') IS NOT NULL AND
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'role') AND
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'identity_avatar_hidden') AND
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'oauth_transactions' AND column_name = 'admin') AND
       to_regclass('public.auth_sessions') IS NOT NULL AND
       to_regclass('public.auth_identities') IS NOT NULL AND
       to_regclass('public.oauth_transactions') IS NOT NULL AS ready`);

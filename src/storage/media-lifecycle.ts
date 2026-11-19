@@ -79,7 +79,7 @@ export async function replaceProfileMedia(userId: string, media: ProfileMedia) {
         }
         await tx
           .update(users)
-          .set({ avatarKey: media.key, updatedAt: new Date() })
+          .set({ avatarKey: media.key, identityAvatarHidden: false, updatedAt: new Date() })
           .where(eq(users.id, userId));
         if (user.avatarKey && user.avatarKey !== media.key)
           await tx
@@ -145,6 +145,24 @@ export async function replaceProfileMedia(userId: string, media: ProfileMedia) {
     throw error;
   }
   for (const key of removed) await flushMediaDeletions(key);
+}
+
+// The caller locks the profile row before clearing media.
+export async function clearProfileMedia(
+  tx: Pick<typeof db, "update" | "insert" | "delete">,
+  user: { id: string; avatarKey: string | null; bannerKey: string | null },
+  kind: "avatar" | "banner",
+) {
+  const key = kind === "avatar" ? user.avatarKey : user.bannerKey;
+  const fields = kind === "avatar"
+    ? { avatarKey: null, identityAvatarHidden: true }
+    : { bannerKey: null, bannerExternalUrl: null, bannerCrop: null };
+  await tx.update(users).set({ ...fields, updatedAt: new Date() }).where(eq(users.id, user.id));
+  if (!key) return;
+  if (kind === "avatar") {
+    await tx.delete(avatarHistory).where(and(eq(avatarHistory.userId, user.id), eq(avatarHistory.key, key)));
+  }
+  await queueDeletion(tx, key);
 }
 
 export async function removeRecentAvatar(userId: string, key: string) {

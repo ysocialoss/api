@@ -48,6 +48,9 @@ test("mentions resolve, notify, edit, and deduplicate through the API", async ()
     server = app.listen(0, "127.0.0.1");
     await once(server, "listening");
     const base = `http://127.0.0.1:${server.address().port}`;
+    const availability = await fetch(base + "/api/profiles/whz/availability");
+    assert.equal(availability.status, 200);
+    assert.deepEqual(await availability.json(), { available: false });
     async function request(path, method = "GET", body) {
       return fetch(base + path, {
         method,
@@ -110,6 +113,19 @@ test("mentions resolve, notify, edit, and deduplicate through the API", async ()
     assert.deepEqual((await get('/api/posts/' + old.id)).post.mentions, [{ id: target.id, handle: 'tag_target', username: 'tag_target' }]);
     await pool.query("UPDATE users SET handle = 'renamed_target' WHERE id = $1", [target.id]);
     assert.equal((await get('/api/posts/' + old.id)).post.mentions[0].handle, 'renamed_target');
+    const editedAlias = await request('/api/posts/' + id, 'PATCH', { content: 'Still tagging @tag_target' });
+    assert.equal(editedAlias.status, 200);
+    assert.deepEqual((await editedAlias.json()).post.mentions, [{ id: target.id, handle: 'renamed_target', username: 'tag_target' }]);
+    const newAlias = await request('/api/posts/' + id + '/replies', 'POST', { content: '@tag_target and @renamed_target', attachmentIds: [] });
+    assert.equal(newAlias.status, 201);
+    const tagged = (await newAlias.json()).post.mentions;
+    assert.deepEqual(tagged.map((mention) => mention.username).sort(), ['renamed_target', 'tag_target']);
+    assert.ok(tagged.every((mention) => mention.id === target.id && mention.handle === 'renamed_target'));
+    const aliasProfile = await get('/api/profiles/tag_target');
+    assert.equal(aliasProfile.profile.id, target.id);
+    assert.equal((await get('/api/profiles/tag_target/availability')).available, false);
+    assert.equal((await request('/api/profiles/tag_target/follow', 'PUT')).status, 200);
+
     await request('/api/posts/' + id, 'DELETE');
     assert.equal((await pool.query('SELECT * FROM post_mentions WHERE post_id = $1', [id])).rows.length, 0);
   } finally {

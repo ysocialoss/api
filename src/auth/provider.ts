@@ -78,6 +78,7 @@ export async function exchange(input: {
   code: string;
   state: string;
   verifier: string;
+  redirectUri: string;
   nonce: string;
 }) {
   const config = await metadata();
@@ -86,7 +87,7 @@ export async function exchange(input: {
     state: input.state,
     code_verifier: input.verifier,
     client_id: env.CNS_CLIENT_ID,
-    redirect_uri: `${env.APP_ORIGIN}/auth/callback`,
+    redirect_uri: input.redirectUri,
   });
   if (!response.ok)
     throw new AuthError(

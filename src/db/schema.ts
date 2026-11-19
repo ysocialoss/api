@@ -21,15 +21,19 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
+export const userRole = pgEnum("user_role", ["admin", "moderator", "og", "user"]);
+
 export const users = pgTable(
   "users",
   {
     id: uuid().defaultRandom().primaryKey(),
+    role: userRole().notNull().default("user"),
     handle: text().notNull().unique("users_handle_unique"),
     displayName: text("display_name").notNull().default(""),
     bio: text().notNull().default(""),
     notificationPromptDismissed: boolean("notification_prompt_dismissed").notNull().default(false),
     avatarKey: text("avatar_key"),
+    identityAvatarHidden: boolean("identity_avatar_hidden").notNull().default(false),
     bannerKey: text("banner_key"),
     bannerCrop: jsonb("banner_crop").$type<BannerCrop>(),
     bannerExternalUrl: text("banner_external_url"),
@@ -52,9 +56,19 @@ export const users = pgTable(
   ],
 );
 
+export const userHandles = pgTable(
+  "user_handles",
+  {
+    handle: text().primaryKey(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  },
+  (table) => [index("user_handles_user_idx").on(table.userId)],
+);
+
 export const oauthTransactions = pgTable("oauth_transactions", {
   state: text().primaryKey(),
   browserHash: text("browser_hash").notNull(),
+  admin: boolean().notNull().default(false),
   verifier: text().notNull(),
   nonce: text().notNull(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),

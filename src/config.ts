@@ -23,6 +23,11 @@ export const env = z
       .url()
       .default("http://localhost:3000")
       .transform((value) => new URL(value).origin),
+    ADMIN_ORIGIN: z
+      .url()
+      .refine((value) => ["http:", "https:"].includes(new URL(value).protocol))
+      .transform((value) => new URL(value).origin)
+      .optional(),
     CNS_CLIENT_ID: z.string().min(1).default("ysocial"),
     CNS_DISCOVERY_URL: z
       .url()
@@ -62,6 +67,10 @@ if (
   );
 }
 
+if (env.NODE_ENV === "production" && env.ADMIN_ORIGIN && !env.ADMIN_ORIGIN.startsWith("https:")) {
+  throw new Error("Production requires an HTTPS ADMIN_ORIGIN");
+}
+
 if (
   env.NODE_ENV === "production" &&
   [env.CNS_DISCOVERY_URL, env.CNS_LOGIN_URL, env.CNS_API_ORIGIN].some(
@@ -70,3 +79,6 @@ if (
 ) {
   throw new Error("Production CNS endpoints must use HTTPS");
 }
+
+export const adminHandle = env.NODE_ENV === "development" ? "ytest" : "whz";
+export const reservedAdminHandle = adminHandle.includes("test") ? null : adminHandle;

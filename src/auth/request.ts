@@ -12,8 +12,8 @@ export function cookie(req: Request, key: string) {
       ?.slice(key.length + 1) ?? ""
   );
 }
-export function requireOrigin(req: Request) {
-  if (req.headers.origin !== env.APP_ORIGIN)
+export function requireOrigin(req: Request, origin = env.APP_ORIGIN) {
+  if (req.headers.origin !== origin)
     throw new AuthError(403, "invalid_origin");
 }
 

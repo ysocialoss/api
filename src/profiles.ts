@@ -12,11 +12,12 @@ import {
 } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "./db/index.ts";
-import { posts, users, userFollows } from "./db/schema.ts";
+import { posts, users, userFollows, userHandles } from "./db/schema.ts";
 import { profileReposts } from "./feed-entries.ts";
 import { AuthError } from "./auth/provider.ts";
 import { postSelection, serializePost } from "./post-data.ts";
-import { userSelection } from "./user-data.ts";
+import { publicProfileSelection, userSelection } from "./user-data.ts";
+import { reservedAdminHandle } from "./config.ts";
 import { recordNotification } from "./notification-events.ts";
 
 const router = Router();
@@ -54,6 +55,9 @@ router.patch("/me", async (req, res) => {
     .refine((changes) => Object.keys(changes).length > 0)
     .safeParse(req.body);
   if (!input.success) throw new AuthError(400, "invalid_profile");
+  if (input.data.handle && input.data.handle !== viewer.handle &&
+    (input.data.handle === reservedAdminHandle || viewer.handle === reservedAdminHandle))
+    throw new AuthError(409, "reserved_username");
   const [profile] = await db
     .update(users)
     .set({ ...input.data, updatedAt: new Date() })
@@ -70,11 +74,13 @@ router.get("/:handle/availability", async (req, res) => {
   const handle = handleSchema.safeParse(req.params.handle);
   if (!handle.success) throw new AuthError(400, "invalid_handle");
   const [existing] = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(eq(users.handle, handle.data))
+    .select({ id: userHandles.userId })
+    .from(userHandles)
+    .where(eq(userHandles.handle, handle.data))
     .limit(1);
-  const available = !existing || existing.id === (await readViewerId(req));
+  const available = existing
+    ? existing.id === (await readViewerId(req))
+    : handle.data !== reservedAdminHandle;
   res.json({ available });
 });
 router.get("/:handle", async (req, res) => {
@@ -84,17 +90,11 @@ router.get("/:handle", async (req, res) => {
   const [profile] = await db
     .select({
       ...userSelection,
-      bio: users.bio,
-      bannerCrop: users.bannerCrop,
-      bannerUrl: sql<
-        string | null
-      >`case when ${users.bannerKey} is null then ${users.bannerExternalUrl} else '/api/' || ${users.bannerKey} end`,
+      ...publicProfileSelection,
       createdAt: users.createdAt,
-      followerCount: sql<number>`(select count(*)::int from ${userFollows} where ${userFollows.followingId} = ${users.id})`,
-      followingCount: sql<number>`(select count(*)::int from ${userFollows} where ${userFollows.followerId} = ${users.id})`,
     })
     .from(users)
-    .where(eq(users.handle, req.params.handle));
+    .where(eq(users.id, db.select({ id: userHandles.userId }).from(userHandles).where(eq(userHandles.handle, req.params.handle))));
   if (!profile) throw new AuthError(404, "profile_not_found");
   const viewerId = await readViewerId(req);
   const relationships = viewerId
@@ -200,7 +200,7 @@ async function setFollow(req: Request, follow: boolean) {
     const [target] = await tx
       .select({ id: users.id })
       .from(users)
-      .where(eq(users.handle, handle.data))
+      .where(eq(users.id, tx.select({ id: userHandles.userId }).from(userHandles).where(eq(userHandles.handle, handle.data))))
       .for("no key update");
     if (!target) throw new AuthError(404, "profile_not_found");
     if (target.id === viewer.id) throw new AuthError(400, "cannot_follow_self");

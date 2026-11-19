@@ -79,16 +79,18 @@ export async function readSessionHash(tokenHash: string) {
         .where(eq(authSessions.tokenHash, session.tokenHash));
       return { kind: "anonymous" } as const;
     }
-    const [user] = identity.userId
-      ? await tx
+    const user = identity.userId
+      ? (await tx
           .select({
             ...userSelection,
+            role: users.role,
             bannerCrop: users.bannerCrop,
             bannerUrl: sql<string | null>`case when ${users.bannerKey} is null then ${users.bannerExternalUrl} else '/api/' || ${users.bannerKey} end`,
           })
           .from(users)
           .where(eq(users.id, identity.userId))
-      : [];
+          .limit(1)).at(0)
+      : null;
     return { kind: "authenticated", identity, user: user ?? null } as const;
   });
   if (outcome.kind === "unavailable")

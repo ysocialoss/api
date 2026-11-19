@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "identity_avatar_hidden" boolean DEFAULT false NOT NULL;
