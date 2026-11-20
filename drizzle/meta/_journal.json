@@ -288,6 +288,13 @@
       "when": 1795129477716,
       "tag": "0040_profile_pronouns",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1795182599270,
+      "tag": "0041_github_connections",
+      "breakpoints": true
     }
   ]
 }

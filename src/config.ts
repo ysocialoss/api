@@ -34,6 +34,9 @@ export const env = z
       .default("https://api.cns.ad/.well-known/openid-configuration"),
     CNS_LOGIN_URL: z.url().default("https://accounts.cns.ad/login"),
     CNS_API_ORIGIN: z.url().default("https://api.cns.ad"),
+    GITHUB_CLIENT_ID: z.string().optional(),
+    GITHUB_CLIENT_SECRET: z.string().optional(),
+    GITHUB_PUBLIC_READ_TOKEN: z.string().optional(),
     SESSION_ENCRYPTION_KEY: z.preprocess(
       (value) => (value === "" ? undefined : value),
       z

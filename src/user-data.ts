@@ -1,5 +1,10 @@
 import { getTableName, sql, type SQLWrapper, type Table } from "drizzle-orm";
-import { authIdentities, userFollows, users } from "./db/schema.ts";
+import { authIdentities, githubConnections, userFollows, users } from "./db/schema.ts";
+
+export const githubProfileSelection = {
+  login: githubConnections.login,
+  contributionCount: githubConnections.contributionCount,
+};
 
 type AvatarUserTable = Table & {
   id: { name: string };
