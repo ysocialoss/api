@@ -13,6 +13,8 @@ import { startLiveEvents } from "./live-events.ts";
 import notifications from "./notifications.ts";
 import topics from "./topics.ts";
 import search from "./search.ts";
+import dms from "./dms.ts";
+import { attachDmSocket } from "./dm-socket.ts";
 import { startPushDelivery } from "./push-delivery.ts";
 import { AuthError } from "./auth/provider.ts";
 import express, { type ErrorRequestHandler } from "express";
@@ -53,6 +55,7 @@ app.use("/api/live", live);
 app.use("/api/notifications", notifications);
 app.use("/api/topics", topics);
 app.use("/api/search", search);
+app.use("/api/dms", dms);
 app.use("/api/profiles", profiles);
 app.use("/api/avatars", avatars);
 app.use("/api/banners", banners);
@@ -106,6 +109,7 @@ if (import.meta.main) {
   const server = app.listen(env.PORT, () =>
     console.info(`API listening on port ${env.PORT}`),
   );
+  const dmSocket = attachDmSocket(server);
   let stopping = false;
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.once(signal, () => {
@@ -118,6 +122,7 @@ if (import.meta.main) {
       stopPushDelivery();
       stopVoiceJobs();
       stopLiveEvents();
+      dmSocket.stop();
       setTimeout(() => {
         server.close(() => { void pool.end(); });
         server.closeIdleConnections();
@@ -150,6 +155,11 @@ if (import.meta.main) {
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'banner_crop') AND
       to_regclass('public.user_follows') IS NOT NULL AND
       to_regclass('public.notifications') IS NOT NULL AND
+      to_regclass('public.dm_conversations') IS NOT NULL AND
+      to_regclass('public.dm_messages') IS NOT NULL AND
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'dm_devices' AND column_name = 'generation') AND
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'dm_generation') AND
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'hide_notification_content') AND
       to_regclass('public.push_subscriptions') IS NOT NULL AND
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'push_subscriptions' AND column_name = 'muted_forever') AND
       to_regclass('public.push_deliveries') IS NOT NULL AND
@@ -174,7 +184,7 @@ if (import.meta.main) {
     stopMediaCleanup = startMediaCleanup();
     stopVoiceJobs = startVoiceJobs();
     stopPushDelivery = startPushDelivery();
-    stopLiveEvents = startLiveEvents();
+    stopLiveEvents = startLiveEvents(dmSocket);
     startupReady = true;
   } catch (error) {
     if (!shutdown.signal.aborted) {
@@ -182,6 +192,7 @@ if (import.meta.main) {
         "API startup failed. Check database migrations and EU R2 configuration.",
         error,
       );
+      dmSocket.stop();
       server.close();
       await pool.end();
       process.exitCode = 1;

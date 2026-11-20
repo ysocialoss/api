@@ -1,5 +1,5 @@
 import { cookie, requireOrigin, requireSessionUser } from "./auth/request.ts";
-import { publishWaitlistChange } from "./live-events.ts";
+import { publishAccountChange, publishWaitlistChange } from "./live-events.ts";
 import { serveLiveStream } from "./live.ts";
 import { createHash } from "node:crypto";
 import { Router } from "express";
@@ -240,10 +240,17 @@ router.post(["/logout", "/admin/logout"], async (req, res) => {
   const origin = req.path.startsWith("/admin/") ? adminOrigin() : env.APP_ORIGIN;
   if (req.headers.origin !== origin) throw new AuthError(403, "invalid_origin");
   // DELETE waits for an in-flight refresh and returns its newest token.
-  const [session] = await db
-    .delete(authSessions)
-    .where(eq(authSessions.tokenHash, hash(cookie(req, "session"))))
-    .returning();
+  const [session] = await db.transaction(async (tx) => {
+    const sessions = await tx.delete(authSessions)
+      .where(eq(authSessions.tokenHash, hash(cookie(req, "session"))))
+      .returning();
+    if (sessions.length) {
+      const [identity] = await tx.select({ userId: authIdentities.userId }).from(authIdentities)
+        .where(eq(authIdentities.id, sessions[0].identityId));
+      if (identity?.userId) await publishAccountChange(tx, identity.userId);
+    }
+    return sessions;
+  });
   res.clearCookie("session", cookieOptions(origin));
   if (session) {
     try {

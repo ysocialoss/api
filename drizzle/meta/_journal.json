@@ -288,6 +288,34 @@
       "when": 1795129477716,
       "tag": "0040_profile_pronouns",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1795133157929,
+      "tag": "0041_encrypted_dms",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1795162946420,
+      "tag": "0042_dm_invite_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1795163820541,
+      "tag": "0043_hide_notification_content",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1795166476708,
+      "tag": "0044_dm_identity_recovery",
+      "breakpoints": true
     }
   ]
 }

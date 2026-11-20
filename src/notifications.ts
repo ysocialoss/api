@@ -17,6 +17,7 @@ import { endpointSchema, subscriptionSchema } from "./push-config.ts";
 import { userSelection } from "./user-data.ts";
 import { notificationPreview } from "./notification-content.ts";
 import { visiblePostAuthor } from "./post-data.ts";
+import { publishDmChange } from "./dm-events.ts";
 
 const router = Router();
 router.use((_req, res, next) => {
@@ -46,12 +47,19 @@ router.get("/", async (req, res) => {
   if (!unreadQuery.success)
     throw new AuthError(400, "invalid_notification_query");
   const unread = unreadQuery.data === "true";
+  // Older clients validate a closed set of kinds and cannot display conversations.
+  const visibleKind = req.query.includeDms === "true" ? undefined : isNull(notifications.conversationId);
+  const [preferences] = await db.select({ hideContent: users.hideNotificationContent }).from(users)
+    .where(eq(users.id, userId));
+  const hideContent = preferences?.hideContent ?? true;
   const rows = await db
     .select({
       id: notifications.id,
       kind: notifications.kind,
       postId: notifications.postId,
-      preview: posts.content,
+      conversationId: notifications.conversationId,
+      preview: sql<string | null>`case when ${hideContent}::boolean then null else ${posts.content} end`,
+      chatPreview: sql<boolean>`not ${hideContent}::boolean and ${notifications.kind} = 'dm_message'`,
       hasGif: sql<boolean>`${posts.gif} IS NOT NULL`,
       hasVoice: sql<boolean>`${posts.voice} IS NOT NULL`,
       readAt: notifications.readAt,
@@ -64,6 +72,7 @@ router.get("/", async (req, res) => {
     .where(
       and(
         eq(notifications.recipientId, userId),
+        visibleKind,
         unread ? isNull(notifications.readAt) : undefined,
         cursor
           ? or(
@@ -82,7 +91,7 @@ router.get("/", async (req, res) => {
     .select({ value: sql<number>`count(*)::int` })
     .from(notifications)
     .where(
-      and(eq(notifications.recipientId, userId), isNull(notifications.readAt)),
+      and(eq(notifications.recipientId, userId), visibleKind, isNull(notifications.readAt)),
     );
   const page = rows.slice(0, 20),
     last = page.at(-1);
@@ -92,6 +101,7 @@ router.get("/", async (req, res) => {
       preview: row.preview === null ? null : notificationPreview(row.preview, hasGif, hasVoice),
     })),
     unreadCount: count.value,
+    hideContent,
     nextCursor:
       rows.length > 20 && last
         ? Buffer.from(
@@ -116,6 +126,7 @@ router.put("/read", async (req, res) => {
       and(
         eq(notifications.recipientId, user.id),
         isNull(notifications.readAt),
+        req.query.includeDms === "true" ? undefined : isNull(notifications.conversationId),
         sql`${notifications.createdAt} <= ${new Date(input.data.through)}`,
       ),
     );
@@ -138,13 +149,23 @@ router.put("/:id/read", async (req, res) => {
   if (!saved) throw new AuthError(404, "notification_not_found");
   res.sendStatus(204);
 });
+router.patch("/previews", async (req, res) => {
+  const user = await requireUser(req);
+  const input = z.strictObject({ hideContent: z.boolean() }).safeParse(req.body);
+  if (!input.success) throw new AuthError(400, "invalid_notification_query");
+  await db.transaction(async (tx) => {
+    await tx.update(users).set({ hideNotificationContent: input.data.hideContent }).where(eq(users.id, user.id));
+    await publishDmChange(tx, user.id, { type: "previews", hidden: input.data.hideContent });
+  });
+  res.sendStatus(204);
+});
 router.get("/push", async (req, res) => {
   const userId = await readViewerId(req);
   if (!userId) throw new AuthError(401, "sign_in_required");
   const endpoint = endpointSchema.optional().safeParse(req.query.endpoint);
   if (!endpoint.success) throw new AuthError(400, "invalid_push_subscription");
   const [user] = await db
-    .select({ promptDismissed: users.notificationPromptDismissed })
+    .select({ promptDismissed: users.notificationPromptDismissed, hideContent: users.hideNotificationContent })
     .from(users)
     .where(eq(users.id, userId));
   const [subscription] = endpoint.data
@@ -166,6 +187,7 @@ router.get("/push", async (req, res) => {
   res.json({
     publicKey: env.PUSH?.publicKey ?? null,
     promptDismissed: user.promptDismissed,
+    hideContent: user.hideContent,
     subscribed: !!subscription,
     mutedUntil: subscription?.mutedUntil ?? null,
     mutedForever: subscription?.mutedForever ?? false,
