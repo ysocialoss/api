@@ -4,17 +4,32 @@ import { WebSocket, WebSocketServer } from "ws";
 import { cookie } from "./auth/request.ts";
 import { readSession } from "./auth/session.ts";
 import { env } from "./config.ts";
-import { dmEvent } from "./dm-events.ts";
+import { and, eq, or } from "drizzle-orm";
+import { z } from "zod";
+import { db } from "./db/index.ts";
+import { dmConversations } from "./db/schema.ts";
+import { dmEvent, publishTyping } from "./dm-events.ts";
+
+const clientFrame = z.strictObject({ type: z.literal("typing"), id: z.uuid() });
+const TYPING_INTERVAL_MS = 2000;
 
 const HEARTBEAT_MS = 20_000;
 const SESSION_RECHECK_MS = 5 * 60_000;
 const MAX_ACCOUNT_CONNECTIONS = 12;
 const MAX_PENDING_UPGRADES = 100;
 
+function safeJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
 export function attachDmSocket(server: Server) {
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 1024, perMessageDeflate: false });
   const accounts = new Map<string, Set<WebSocket>>();
-  const connections = new Map<WebSocket, { alive: boolean; expires: number }>();
+  const connections = new Map<WebSocket, { alive: boolean; expires: number; typingAt: number; typing: Map<string, string | null> }>();
   const upgrades = new Set<Duplex>();
   let listening = false;
 
@@ -43,13 +58,20 @@ export function attachDmSocket(server: Server) {
       if (!listening || connections.size >= env.LIVE_MAX_STREAMS || account.size >= MAX_ACCOUNT_CONNECTIONS)
         return reject(socket, "503 Service Unavailable");
       sockets.handleUpgrade(request, socket, head, (client) => {
-        const state = { alive: true, expires: Date.now() + SESSION_RECHECK_MS };
+        const state = { alive: true, expires: Date.now() + SESSION_RECHECK_MS, typingAt: 0, typing: new Map<string, string | null>() };
         connections.set(client, state);
         account.add(client);
         accounts.set(user.id, account);
         client.on("pong", () => { state.alive = true; });
         client.on("error", () => client.terminate());
-        client.on("message", () => client.close(1008));
+        client.on("message", (data, isBinary) => {
+          const frame = isBinary ? undefined : clientFrame.safeParse(safeJson(data.toString()));
+          if (!frame?.success) return client.close(1008);
+          const now = Date.now();
+          if (now - state.typingAt < TYPING_INTERVAL_MS) return;
+          state.typingAt = now;
+          void typing(user.id, frame.data.id, state);
+        });
         client.on("close", () => {
           connections.delete(client);
           account.delete(client);
@@ -63,6 +85,22 @@ export function attachDmSocket(server: Server) {
       clearTimeout(timeout);
       upgrades.delete(socket);
     }
+  }
+
+  async function typing(userId: string, conversationId: string, state: { typing: Map<string, string | null> }) {
+    try {
+      let peerId = state.typing.get(conversationId);
+      if (peerId === undefined) {
+        const [conversation] = await db.select().from(dmConversations).where(and(
+          eq(dmConversations.id, conversationId),
+          or(eq(dmConversations.firstUserId, userId), eq(dmConversations.secondUserId, userId)),
+          eq(dmConversations.inviteStatus, "accepted"),
+        ));
+        peerId = conversation ? (conversation.firstUserId === userId ? conversation.secondUserId : conversation.firstUserId) : null;
+        if (state.typing.size < 64) state.typing.set(conversationId, peerId);
+      }
+      if (peerId) await publishTyping(db, peerId, conversationId, userId);
+    } catch {}
   }
 
   const heartbeat = setInterval(() => {

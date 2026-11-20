@@ -3,7 +3,8 @@ import { z } from "zod";
 import type { db } from "./db/index.ts";
 
 const change = z.discriminatedUnion("type", [
-  z.strictObject({ type: z.literal("conversation"), id: z.uuid(), roster: z.boolean() }),
+  z.strictObject({ type: z.literal("conversation"), id: z.uuid(), roster: z.boolean(), message: z.uuid().optional() }),
+  z.strictObject({ type: z.literal("typing"), id: z.uuid(), userId: z.uuid() }),
   z.strictObject({ type: z.literal("devices") }),
   z.strictObject({ type: z.literal("notifications") }),
   z.strictObject({ type: z.literal("previews"), hidden: z.boolean() }),
@@ -14,6 +15,11 @@ type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export async function publishDmChange(tx: Transaction, userId: string, change: Change) {
   await tx.execute(sql`select pg_notify('live_dm', ${JSON.stringify({ userId, change })})`);
+}
+
+export async function publishTyping(database: Pick<typeof db, "execute">, recipientId: string, conversationId: string, userId: string) {
+  const payload = JSON.stringify({ userId: recipientId, change: { type: "typing", id: conversationId, userId } });
+  await database.execute(sql`select pg_notify('live_dm', ${payload})`);
 }
 
 export async function publishDmDeviceChange(tx: Transaction, userId: string) {
