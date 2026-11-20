@@ -12,11 +12,11 @@ import {
 } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "./db/index.ts";
-import { posts, users, userFollows, userHandles } from "./db/schema.ts";
+import { githubConnections, posts, users, userFollows, userHandles } from "./db/schema.ts";
 import { profileReposts } from "./feed-entries.ts";
 import { AuthError } from "./auth/provider.ts";
 import { postSelection, serializePost } from "./post-data.ts";
-import { banDetailsSelection, publicProfileSelection, userSelection } from "./user-data.ts";
+import { banDetailsSelection, githubProfileSelection, publicProfileSelection, userSelection } from "./user-data.ts";
 import { recordNotification } from "./notification-events.ts";
 import { badgeIconDirectory, isBadgeIcon } from "./profile-badges.ts";
 import { generalPronounRecommendations, pronounRecommendations, pronounsLimit, pronounsSchema } from "./pronouns.ts";
@@ -156,10 +156,12 @@ router.get("/:handle", async (req, res) => {
       ...publicProfileSelection,
       isOg: sql<boolean>`${users.role} = 'og'`,
       badges: users.badges,
+      github: githubProfileSelection,
       createdAt: users.createdAt,
       ...banDetailsSelection,
     })
     .from(users)
+    .leftJoin(githubConnections, eq(githubConnections.userId, users.id))
     .where(eq(users.id, db.select({ id: userHandles.userId }).from(userHandles).where(eq(userHandles.handle, req.params.handle))));
   if (!profile) throw new AuthError(404, "profile_not_found");
   if (profile.banReason) {

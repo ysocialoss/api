@@ -6,6 +6,8 @@ import voices from "./voices.ts";
 import { startVoiceJobs } from "./storage/voice-jobs.ts";
 import { checkAvatarStorage } from "./storage/r2.ts";
 import profiles from "./profiles.ts";
+import github from "./github.ts";
+import { startGithubRefresh } from "./github-contribution-jobs.ts";
 import posts from "./posts.ts";
 import og from "./og.ts";
 import live from "./live.ts";
@@ -54,6 +56,7 @@ app.use("/api/notifications", notifications);
 app.use("/api/topics", topics);
 app.use("/api/search", search);
 app.use("/api/profiles", profiles);
+app.use("/api/github", github);
 app.use("/api/avatars", avatars);
 app.use("/api/banners", banners);
 app.use("/api/voices", voices);
@@ -103,6 +106,7 @@ if (import.meta.main) {
   let stopVoiceJobs = () => {};
   let stopPushDelivery = () => {};
   let stopLiveEvents = () => {};
+  let stopGithubRefresh = () => {};
   const server = app.listen(env.PORT, () =>
     console.info(`API listening on port ${env.PORT}`),
   );
@@ -118,6 +122,7 @@ if (import.meta.main) {
       stopPushDelivery();
       stopVoiceJobs();
       stopLiveEvents();
+      stopGithubRefresh();
       setTimeout(() => {
         server.close(() => { void pool.end(); });
         server.closeIdleConnections();
@@ -163,7 +168,10 @@ if (import.meta.main) {
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'oauth_transactions' AND column_name = 'admin') AND
       to_regclass('public.auth_sessions') IS NOT NULL AND
       to_regclass('public.auth_identities') IS NOT NULL AND
-      to_regclass('public.oauth_transactions') IS NOT NULL AS ready`);
+      to_regclass('public.oauth_transactions') IS NOT NULL AND
+      to_regclass('public.github_connections') IS NOT NULL AND
+      to_regclass('public.github_link_attempts') IS NOT NULL AND
+      to_regclass('public.github_contribution_jobs') IS NOT NULL AS ready`);
     if (!schema.rows[0]?.ready) {
       throw new Error(
         "Database schema is missing. Run pnpm db:migrate in api/ before starting the API.",
@@ -175,6 +183,7 @@ if (import.meta.main) {
     stopVoiceJobs = startVoiceJobs();
     stopPushDelivery = startPushDelivery();
     stopLiveEvents = startLiveEvents();
+    stopGithubRefresh = startGithubRefresh();
     startupReady = true;
   } catch (error) {
     if (!shutdown.signal.aborted) {

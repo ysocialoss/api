@@ -4,8 +4,8 @@ import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
 import { requireApprovedUser, requireOrigin } from "./auth/request.ts";
 import { db } from "./db/index.ts";
-import { authIdentities, moderationActivity, pollVotes, posts, userRole, users } from "./db/schema.ts";
-import { publicProfileSelection, userSelection } from "./user-data.ts";
+import { authIdentities, githubConnections, moderationActivity, pollVotes, posts, userRole, users } from "./db/schema.ts";
+import { githubProfileSelection, publicProfileSelection, userSelection } from "./user-data.ts";
 import { clearProfileMedia, flushMediaDeletions, queueDeletion } from "./storage/media-lifecycle.ts";
 import { affectedPostIds, publishAccountChange, publishLiveChange, publishWaitlistChange } from "./live-events.ts";
 import { serveLiveStream } from "./live.ts";
@@ -104,10 +104,11 @@ router.get("/user/:id", async (req, res) => {
   const [user] = await db.select({
     ...userFields,
     ...publicProfileSelection,
+    github: githubProfileSelection,
     avatarUrl: userSelection.avatarUrl,
     colour: users.colour,
     updatedAt: users.updatedAt,
-  }).from(users).where(eq(users.id, id));
+  }).from(users).leftJoin(githubConnections, eq(githubConnections.userId, users.id)).where(eq(users.id, id));
   if (!user) throw new AuthError(404, "user_not_found");
   res.json({
     ...formatUser(user), kind: "user",
@@ -209,7 +210,9 @@ router.get("/users", async (req, res) => {
     avatarUrl: userSelection.avatarUrl,
     bio: users.bio,
     pronouns: users.pronouns,
+    github: githubProfileSelection,
   }).from(users)
+    .leftJoin(githubConnections, eq(githubConnections.userId, users.id))
     .where(userSearch(q.replace(/^@/, "").toLowerCase()))
     .orderBy(desc(users.createdAt), desc(users.id))
     .limit(pageSize + 1).offset((page - 1) * pageSize);
@@ -423,7 +426,8 @@ router.patch("/users/:id/profile", async (req, res) => {
     }
     const [user] = await tx.select({
       ...userFields, avatarUrl: userSelection.avatarUrl, bio: users.bio, pronouns: users.pronouns,
-    }).from(users).where(eq(users.id, target.id));
+      github: githubProfileSelection,
+    }).from(users).leftJoin(githubConnections, eq(githubConnections.userId, users.id)).where(eq(users.id, target.id));
     await tx.insert(moderationActivity).values({
       actorId: actor.id, actorHandle: actor.handle, targetId: target.id, targetHandle: target.handle,
       action: change.action, detail: change.action === "changeUsername" ? `@${target.handle} → @${user.handle}` : null,
