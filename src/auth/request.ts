@@ -3,7 +3,7 @@ import type { Request } from "express";
 import { env } from "../config.ts";
 import { AuthError } from "./provider.ts";
 
-export function cookie(req: Request, key: string) {
+export function cookie(req: Pick<Request, "headers">, key: string) {
   return (
     req.headers.cookie
       ?.split(";")

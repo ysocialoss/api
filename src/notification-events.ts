@@ -10,7 +10,7 @@ import { env } from "./config.ts";
 type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Event = Pick<
   typeof notifications.$inferInsert,
-  "recipientId" | "actorId" | "kind" | "postId" | "subject"
+  "recipientId" | "actorId" | "kind" | "postId" | "subject" | "conversationId"
 >;
 
 // Call in the action's transaction. Failed or replayed actions never fan out.

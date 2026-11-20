@@ -6,6 +6,7 @@ import type { Voice } from "../storage/voice-selection.ts";
 import { sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
+  bigint,
   check,
   customType,
   boolean,
@@ -50,6 +51,9 @@ export const users = pgTable(
     bio: text().notNull().default(""),
     pronouns: text().notNull().default(""),
     notificationPromptDismissed: boolean("notification_prompt_dismissed").notNull().default(false),
+    dmGeneration: integer("dm_generation").notNull().default(1),
+    dmOptedOut: boolean("dm_opted_out").notNull().default(false),
+    hideNotificationContent: boolean("hide_notification_content").notNull().default(false),
     avatarKey: text("avatar_key"),
     identityAvatarHidden: boolean("identity_avatar_hidden").notNull().default(false),
     bannerKey: text("banner_key"),
@@ -83,6 +87,91 @@ export const userHandles = pgTable(
   },
   (table) => [index("user_handles_user_idx").on(table.userId)],
 );
+
+export const dmDevices = pgTable("dm_devices", {
+  id: uuid().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  label: text().notNull(),
+  encryptionKey: text("encryption_key").notNull(),
+  signingKey: text("signing_key").notNull(),
+  proof: text().notNull(),
+  generation: integer().notNull().default(1),
+  root: boolean().notNull().default(false),
+  approvedBy: uuid("approved_by"),
+  approval: text(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  revokedBy: uuid("revoked_by"),
+  revocation: text(),
+}, (table) => [
+  index("dm_devices_user_idx").on(table.userId),
+  uniqueIndex("dm_devices_root_idx").on(table.userId, table.generation).where(sql`${table.root}`),
+  check("dm_devices_approval_check", sql`(${table.approvedBy} is null) = (${table.approval} is null) and (not ${table.root} or ${table.approvedBy} is null)`),
+  check("dm_devices_revocation_check", sql`(${table.revokedAt} is null) = (${table.revokedBy} is null) and (${table.revokedAt} is null) = (${table.revocation} is null)`),
+]);
+
+export const dmInviteStatus = pgEnum("dm_invite_status", ["pending", "accepted", "declined"]);
+
+export const dmConversations = pgTable("dm_conversations", {
+  id: uuid().defaultRandom().primaryKey(),
+  firstUserId: uuid("first_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  secondUserId: uuid("second_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  invitedBy: uuid("invited_by"),
+  inviteStatus: dmInviteStatus("invite_status").notNull().default("accepted"),
+  lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
+  firstHiddenAt: timestamp("first_hidden_at", { withTimezone: true }),
+  secondHiddenAt: timestamp("second_hidden_at", { withTimezone: true }),
+}, (table) => [
+  unique("dm_conversations_pair_unique").on(table.firstUserId, table.secondUserId),
+  index("dm_conversations_second_user_idx").on(table.secondUserId),
+  check("dm_conversations_pair_order", sql`${table.firstUserId} < ${table.secondUserId}`),
+  check("dm_conversations_inviter_check", sql`
+    (${table.invitedBy} is null and ${table.inviteStatus} = 'accepted') or
+    (${table.invitedBy} is not null and ${table.invitedBy} in (${table.firstUserId}, ${table.secondUserId}))
+  `),
+]);
+
+export const dmMessages = pgTable("dm_messages", {
+  id: uuid().primaryKey(),
+  conversationId: uuid("conversation_id").notNull().references(() => dmConversations.id, { onDelete: "cascade" }),
+  senderId: uuid("sender_id").notNull(),
+  senderDeviceId: uuid("sender_device_id").notNull(),
+  version: integer().notNull(),
+  iv: text().notNull(),
+  ciphertext: text().notNull(),
+  signature: text().notNull(),
+  envelopes: jsonb().$type<Record<string, string>>().notNull(),
+  sequence: bigint({ mode: "bigint" }).generatedAlwaysAsIdentity().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  editedAt: timestamp("edited_at", { withTimezone: true }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+}, (table) => [unique("dm_messages_conversation_sequence_unique").on(table.conversationId, table.sequence)]);
+
+export const dmReactions = pgTable("dm_reactions", {
+  messageId: uuid("message_id").notNull().references(() => dmMessages.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  emoji: text().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [primaryKey({ columns: [table.messageId, table.userId] })]);
+
+export const dmPollVotes = pgTable("dm_poll_votes", {
+  messageId: uuid("message_id").notNull().references(() => dmMessages.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  option: integer().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [primaryKey({ columns: [table.messageId, table.userId] }), check("dm_poll_votes_option_check", sql`${table.option} between 0 and 9`)]);
+
+const dmBlob = customType<{ data: Buffer }>({ dataType: () => "bytea" });
+
+export const dmAttachments = pgTable("dm_attachments", {
+  id: uuid().primaryKey(),
+  conversationId: uuid("conversation_id").notNull().references(() => dmConversations.id, { onDelete: "cascade" }),
+  uploaderId: uuid("uploader_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  messageId: uuid("message_id").references(() => dmMessages.id, { onDelete: "cascade" }),
+  data: dmBlob().notNull(),
+  size: integer().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [index("dm_attachments_message_idx").on(table.messageId)]);
 
 export const oauthTransactions = pgTable("oauth_transactions", {
   state: text().primaryKey(),
@@ -391,6 +480,8 @@ export const notificationKind = pgEnum("notification_kind", [
   "follow",
   "mention",
   "quote",
+  "dm_invite",
+  "dm_message",
 ]);
 export const notifications = pgTable(
   "notifications",
@@ -404,6 +495,7 @@ export const notifications = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     kind: notificationKind().notNull(),
     postId: uuid("post_id").references(() => posts.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id").references(() => dmConversations.id, { onDelete: "cascade" }),
     // Stable event identity also deduplicates an unlike/re-like or unfollow/re-follow.
     subject: text().notNull(),
     readAt: timestamp("read_at", { withTimezone: true }),
@@ -426,13 +518,18 @@ export const notifications = pgTable(
     index("notifications_unread_idx")
       .on(table.recipientId)
       .where(sql`${table.readAt} is null`),
+    index("notifications_conversation_idx").on(table.conversationId).where(sql`${table.conversationId} is not null`),
     check(
       "notifications_not_self",
       sql`${table.recipientId} <> ${table.actorId}`,
     ),
     check(
       "notifications_subject_check",
-      sql`(${table.kind} = 'follow' AND ${table.postId} IS NULL) OR (${table.kind} <> 'follow' AND ${table.postId} IS NOT NULL)`,
+      sql`case
+        when ${table.kind}::text in ('dm_invite', 'dm_message') then ${table.conversationId} is not null and ${table.postId} is null
+        when ${table.kind} = 'follow' then ${table.conversationId} is null and ${table.postId} is null
+        else ${table.conversationId} is null and ${table.postId} is not null
+      end`,
     ),
   ],
 );
