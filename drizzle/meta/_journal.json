@@ -330,6 +330,13 @@
       "when": 1795195989555,
       "tag": "0046_dm_polls_attachments",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1795197135085,
+      "tag": "0047_dm_opt_out",
+      "breakpoints": true
     }
   ]
 }
