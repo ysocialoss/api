@@ -3,6 +3,7 @@ import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
 
 export const deviceLimit = 8;
+export const attachmentLimit = 3 * 1024 * 1024;
 export const requestLimit = 3;
 export const directoryLimit = 128;
 export const pendingLifetime = 15 * 60_000;
@@ -28,6 +29,7 @@ export const messageInput = z.strictObject({
   ciphertext: base64(5360).refine((value) => Buffer.from(value, "base64").length >= 17),
   signature,
   envelopes: z.record(identifier, base64(344, 256)),
+  attachmentId: identifier.optional(),
 }).refine(({ envelopes }) => Object.keys(envelopes).length <= deviceLimit * 2);
 
 export type DeviceKeys = Pick<z.infer<typeof newDevice>, "id" | "encryptionKey" | "signingKey"> & { userId: string };

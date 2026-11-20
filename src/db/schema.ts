@@ -153,6 +153,25 @@ export const dmReactions = pgTable("dm_reactions", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [primaryKey({ columns: [table.messageId, table.userId] })]);
 
+export const dmPollVotes = pgTable("dm_poll_votes", {
+  messageId: uuid("message_id").notNull().references(() => dmMessages.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  option: integer().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [primaryKey({ columns: [table.messageId, table.userId] }), check("dm_poll_votes_option_check", sql`${table.option} between 0 and 9`)]);
+
+const dmBlob = customType<{ data: Buffer }>({ dataType: () => "bytea" });
+
+export const dmAttachments = pgTable("dm_attachments", {
+  id: uuid().primaryKey(),
+  conversationId: uuid("conversation_id").notNull().references(() => dmConversations.id, { onDelete: "cascade" }),
+  uploaderId: uuid("uploader_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  messageId: uuid("message_id").references(() => dmMessages.id, { onDelete: "cascade" }),
+  data: dmBlob().notNull(),
+  size: integer().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [index("dm_attachments_message_idx").on(table.messageId)]);
+
 export const oauthTransactions = pgTable("oauth_transactions", {
   state: text().primaryKey(),
   browserHash: text("browser_hash").notNull(),
