@@ -25,7 +25,7 @@ test("GitHub links are session-bound and publish only verified contribution data
       APP_ORIGIN: origin,
       GITHUB_CLIENT_ID: "test-client",
       GITHUB_CLIENT_SECRET: "test-secret",
-      GITHUB_PUBLIC_READ_TOKEN: "",
+      GITHUB_PUBLIC_READ_TOKEN: "github-public-test-token",
     });
     database = await import("../src/db/index.ts");
     const { app } = await import("../src/app.ts");
@@ -78,7 +78,7 @@ test("GitHub links are session-bound and publish only verified contribution data
         assert.equal(options.headers.Authorization, "Bearer github-test-token");
         return Response.json({ id: 42, login });
       }
-      assert.equal(options.headers.Authorization, undefined);
+      assert.equal(options.headers.Authorization, "Bearer github-public-test-token");
       if (pathname === "/user/42") return Response.json({ id: 42, login });
       if (pathname === "/orgs/ysocialoss/repos") return Response.json([
         { name: "web", private: false, owner: { login: "ysocialoss" }, fork: false },
@@ -101,9 +101,18 @@ test("GitHub links are session-bound and publish only verified contribution data
         return Response.json({ commits: [{ author: { id: 42 } }, { author: null }] });
       assert.equal(pathname, "/search/issues");
       const query = searchParams.get("q");
-      assert.ok(query.startsWith("org:ysocialoss is:public "));
+      const queryPrefix = "org:ysocialoss is:public ";
+      assert.ok(query.startsWith(queryPrefix));
+      if (!/\bis:(?:issue|pr)\b/.test(query)) return new Response(null, { status: 422 });
       if (failSearch) return new Response(null, { status: 503 });
-      return Response.json({ incomplete_results: false, total_count: query.includes("reviewed-by:") ? 3 : 2 });
+      const counts = new Map([
+        [`is:issue author:${login}`, 2],
+        [`is:pr author:${login}`, 5],
+        [`is:pr reviewed-by:${login}`, 3],
+      ]);
+      const totalCount = counts.get(query.slice(queryPrefix.length));
+      assert.notEqual(totalCount, undefined);
+      return Response.json({ incomplete_results: false, total_count: totalCount });
     });
     const call = (path, options) => fetch(base + path, options);
     const connect = async (headers, returnTo) => {
@@ -152,7 +161,7 @@ test("GitHub links are session-bound and publish only verified contribution data
     login = "renamed-login";
     const refresh = await call("/api/github/refresh", { method: "POST", headers: owner.headers });
     assert.equal(refresh.status, 200);
-    const github = { login, contributionCount: 24 };
+    const github = { login, contributionCount: 29 };
     assert.deepEqual(await refresh.json(), { github });
     assert.equal((await call("/api/github/refresh", { method: "POST", headers: owner.headers })).status, 429);
     assert.deepEqual((await publicProfile()).github, github);

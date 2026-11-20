@@ -157,10 +157,15 @@ export async function readGithubContributions(id: string) {
   const { data } = await apiGet(`/user/${encodeURIComponent(id)}`, publicToken, signal);
   const identity = identitySchema.parse(data);
   if (identity.id !== id) throw new AuthError(502, "github_unavailable");
-  const [commits, authored, reviewed] = await Promise.all([
+  // Authenticated search can reject queries that mix issues and pull requests.
+  const [commits, issues, pullRequests, reviewed] = await Promise.all([
     readCommitCounts(),
-    searchCount(`author:${identity.login}`, signal),
+    searchCount(`is:issue author:${identity.login}`, signal),
+    searchCount(`is:pr author:${identity.login}`, signal),
     searchCount(`is:pr reviewed-by:${identity.login}`, signal),
   ]);
-  return { login: identity.login, contributionCount: (commits.get(id) ?? 0) + authored + reviewed };
+  return {
+    login: identity.login,
+    contributionCount: (commits.get(id) ?? 0) + issues + pullRequests + reviewed,
+  };
 }

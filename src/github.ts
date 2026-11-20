@@ -156,7 +156,7 @@ function reportRefreshFailure() {
 export function startGithubRefresh() {
   if (!githubConfigured) return () => {};
   let running = false;
-  const timer = setInterval(async () => {
+  async function refreshDueConnection() {
     if (running) return;
     running = true;
     try {
@@ -172,7 +172,9 @@ export function startGithubRefresh() {
     } finally {
       running = false;
     }
-  }, automaticRefreshTick);
+  }
+  void refreshDueConnection();
+  const timer = setInterval(refreshDueConnection, automaticRefreshTick);
   timer.unref();
   return () => clearInterval(timer);
 }
