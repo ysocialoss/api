@@ -1,6 +1,6 @@
 {
-  "id": "7fa62d49-afd8-4da9-b537-562ea7db2d44",
-  "prevId": "18022f4c-2cbf-43a4-b941-ab4013c5b026",
+  "id": "3a9548f4-5cfb-4063-aaf3-57010130cc08",
+  "prevId": "d37feb0d-6edd-40f7-a9f1-8adce7d34db3",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -280,20 +280,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "invited_by": {
-          "name": "invited_by",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "invite_status": {
-          "name": "invite_status",
-          "type": "dm_invite_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'accepted'"
-        },
         "last_message_at": {
           "name": "last_message_at",
           "type": "timestamp with time zone",
@@ -362,10 +348,6 @@
         "dm_conversations_pair_order": {
           "name": "dm_conversations_pair_order",
           "value": "\"dm_conversations\".\"first_user_id\" < \"dm_conversations\".\"second_user_id\""
-        },
-        "dm_conversations_inviter_check": {
-          "name": "dm_conversations_inviter_check",
-          "value": "\n    (\"dm_conversations\".\"invited_by\" is null and \"dm_conversations\".\"invite_status\" = 'accepted') or\n    (\"dm_conversations\".\"invited_by\" is not null and \"dm_conversations\".\"invited_by\" in (\"dm_conversations\".\"first_user_id\", \"dm_conversations\".\"second_user_id\"))\n  "
         }
       },
       "isRLSEnabled": false
@@ -802,12 +784,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "conversation_id": {
-          "name": "conversation_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
         "subject": {
           "name": "subject",
           "type": "text",
@@ -871,22 +847,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "notifications_conversation_idx": {
-          "name": "notifications_conversation_idx",
-          "columns": [
-            {
-              "expression": "conversation_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"notifications\".\"conversation_id\" is not null",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -928,19 +888,6 @@
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
-        },
-        "notifications_conversation_id_dm_conversations_id_fk": {
-          "name": "notifications_conversation_id_dm_conversations_id_fk",
-          "tableFrom": "notifications",
-          "tableTo": "dm_conversations",
-          "columnsFrom": [
-            "conversation_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -964,7 +911,7 @@
         },
         "notifications_subject_check": {
           "name": "notifications_subject_check",
-          "value": "case\n        when \"notifications\".\"kind\"::text in ('dm_invite', 'dm_message') then \"notifications\".\"conversation_id\" is not null and \"notifications\".\"post_id\" is null\n        when \"notifications\".\"kind\" = 'follow' then \"notifications\".\"conversation_id\" is null and \"notifications\".\"post_id\" is null\n        else \"notifications\".\"conversation_id\" is null and \"notifications\".\"post_id\" is not null\n      end"
+          "value": "(\"notifications\".\"kind\" = 'follow' AND \"notifications\".\"post_id\" IS NULL) OR (\"notifications\".\"kind\" <> 'follow' AND \"notifications\".\"post_id\" IS NOT NULL)"
         }
       },
       "isRLSEnabled": false
@@ -2196,13 +2143,6 @@
           "notNull": true,
           "default": false
         },
-        "hide_notification_content": {
-          "name": "hide_notification_content",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
         "avatar_key": {
           "name": "avatar_key",
           "type": "text",
@@ -2455,18 +2395,240 @@
         }
       },
       "isRLSEnabled": false
+    },
+    "public.github_connections": {
+      "name": "github_connections",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "github_id": {
+          "name": "github_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "login": {
+          "name": "login",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "contribution_count": {
+          "name": "contribution_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "checked_at": {
+          "name": "checked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attempted_at": {
+          "name": "attempted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "github_connections_attempted_idx": {
+          "name": "github_connections_attempted_idx",
+          "columns": [
+            {
+              "expression": "attempted_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "github_connections_user_id_users_id_fk": {
+          "name": "github_connections_user_id_users_id_fk",
+          "tableFrom": "github_connections",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "github_connections_user_id_unique": {
+          "name": "github_connections_user_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id"
+          ]
+        },
+        "github_connections_github_id_unique": {
+          "name": "github_connections_github_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "github_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "github_contribution_count_check": {
+          "name": "github_contribution_count_check",
+          "value": "\"github_connections\".\"contribution_count\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.github_contribution_jobs": {
+      "name": "github_contribution_jobs",
+      "schema": "",
+      "columns": {
+        "connection_id": {
+          "name": "connection_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "run_at": {
+          "name": "run_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "lease": {
+          "name": "lease",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "github_contribution_jobs_due_idx": {
+          "name": "github_contribution_jobs_due_idx",
+          "columns": [
+            {
+              "expression": "run_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "github_contribution_jobs_connection_id_github_connections_id_fk": {
+          "name": "github_contribution_jobs_connection_id_github_connections_id_fk",
+          "tableFrom": "github_contribution_jobs",
+          "tableTo": "github_connections",
+          "columnsFrom": [
+            "connection_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.github_link_attempts": {
+      "name": "github_link_attempts",
+      "schema": "",
+      "columns": {
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "state_hash": {
+          "name": "state_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "session_hash": {
+          "name": "session_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "verifier": {
+          "name": "verifier",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "github_link_attempts_user_id_users_id_fk": {
+          "name": "github_link_attempts_user_id_users_id_fk",
+          "tableFrom": "github_link_attempts",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     }
   },
   "enums": {
-    "public.dm_invite_status": {
-      "name": "dm_invite_status",
-      "schema": "public",
-      "values": [
-        "pending",
-        "accepted",
-        "declined"
-      ]
-    },
     "public.notification_kind": {
       "name": "notification_kind",
       "schema": "public",
@@ -2476,9 +2638,7 @@
         "reply",
         "follow",
         "mention",
-        "quote",
-        "dm_invite",
-        "dm_message"
+        "quote"
       ]
     },
     "public.user_role": {

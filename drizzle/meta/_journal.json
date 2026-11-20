@@ -292,50 +292,64 @@
     {
       "idx": 41,
       "version": "7",
-      "when": 1795133157929,
-      "tag": "0041_encrypted_dms",
+      "when": 1795182599270,
+      "tag": "0041_github_connections",
       "breakpoints": true
     },
     {
       "idx": 42,
       "version": "7",
-      "when": 1795162946420,
-      "tag": "0042_dm_invite_notifications",
+      "when": 1795190755594,
+      "tag": "0042_github_contribution_jobs",
       "breakpoints": true
     },
     {
       "idx": 43,
       "version": "7",
-      "when": 1795163820541,
-      "tag": "0043_hide_notification_content",
+      "when": 1795191000000,
+      "tag": "0043_encrypted_dms",
       "breakpoints": true
     },
     {
       "idx": 44,
       "version": "7",
-      "when": 1795166476708,
-      "tag": "0044_dm_identity_recovery",
+      "when": 1795191100000,
+      "tag": "0044_dm_invite_notifications",
       "breakpoints": true
     },
     {
       "idx": 45,
       "version": "7",
-      "when": 1795193641318,
-      "tag": "0045_dm_requests_reactions",
+      "when": 1795191200000,
+      "tag": "0045_hide_notification_content",
       "breakpoints": true
     },
     {
       "idx": 46,
       "version": "7",
-      "when": 1795195989555,
-      "tag": "0046_dm_polls_attachments",
+      "when": 1795191300000,
+      "tag": "0046_dm_identity_recovery",
       "breakpoints": true
     },
     {
       "idx": 47,
       "version": "7",
+      "when": 1795193641318,
+      "tag": "0047_dm_requests_reactions",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1795195989555,
+      "tag": "0048_dm_polls_attachments",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
       "when": 1795197135085,
-      "tag": "0047_dm_opt_out",
+      "tag": "0049_dm_opt_out",
       "breakpoints": true
     }
   ]

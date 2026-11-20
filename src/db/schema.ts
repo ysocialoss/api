@@ -182,6 +182,36 @@ export const oauthTransactions = pgTable("oauth_transactions", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 });
 
+export const githubLinkAttempts = pgTable("github_link_attempts", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  stateHash: text("state_hash").notNull(),
+  sessionHash: text("session_hash").notNull(),
+  verifier: text().notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});
+
+export const githubConnections = pgTable("github_connections", {
+  id: uuid().defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().unique().references(() => users.id, { onDelete: "cascade" }),
+  githubId: text("github_id").notNull().unique(),
+  login: text().notNull(),
+  contributionCount: integer("contribution_count"),
+  checkedAt: timestamp("checked_at", { withTimezone: true }),
+  attemptedAt: timestamp("attempted_at", { withTimezone: true }),
+}, (table) => [
+  check("github_contribution_count_check", sql`${table.contributionCount} >= 0`),
+  index("github_connections_attempted_idx").on(table.attemptedAt),
+]);
+
+export const githubContributionJobs = pgTable("github_contribution_jobs", {
+  connectionId: uuid("connection_id").primaryKey()
+    .references(() => githubConnections.id, { onDelete: "cascade" }),
+  runAt: timestamp("run_at", { withTimezone: true }).notNull().defaultNow(),
+  lease: uuid(),
+}, (table) => [
+  index("github_contribution_jobs_due_idx").on(table.runAt, table.connectionId),
+]);
+
 export const authIdentities = pgTable(
   "auth_identities",
   {
