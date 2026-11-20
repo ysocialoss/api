@@ -3,6 +3,7 @@ import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
 
 export const deviceLimit = 8;
+export const requestLimit = 3;
 export const directoryLimit = 128;
 export const pendingLifetime = 15 * 60_000;
 export const identifier = z.uuid().refine((value) => value === value.toLowerCase());
@@ -88,4 +89,12 @@ export function parseInput<T>(schema: z.ZodType<T>, value: unknown) {
   const parsed = schema.safeParse(value);
   if (!parsed.success) throw new AuthError(400, "invalid_dm_request");
   return parsed.data;
+}
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const pictograph = /^(?:\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\p{Extended_Pictographic}[\p{Emoji_Modifier}\uFE0F\u200D\p{Extended_Pictographic}\u{E0020}-\u{E007F}]*)$/u;
+
+export function validReaction(value: string) {
+  const parts = Array.from(graphemes.segment(value));
+  return parts.length === 1 && pictograph.test(value);
 }

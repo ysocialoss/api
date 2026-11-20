@@ -6,7 +6,7 @@ process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = "postgres://unit:unit@127.0.0.1/unit";
 const {
   deviceApproval, deviceProof, deviceRevocation, messageInput, messageProof, newDevice,
-  validDeviceAccess, validDeviceKeys, validSignature,
+  requestLimit, validDeviceAccess, validDeviceKeys, validReaction, validSignature,
 } = await import("../src/dm-protocol.ts");
 
 function device(userId = randomUUID()) {
@@ -64,4 +64,10 @@ test("message input accepts the maximum encrypted payload and rejects plaintext 
   assert.equal(messageInput.safeParse({ ...message, text: "private" }).success, false);
   assert.equal(messageInput.safeParse({ ...message, envelopes: { ...message.envelopes, [randomUUID()]: encrypted(256) } }).success, false);
   assert.equal(validSignature(sender.keys.signingKey, messageProof(randomUUID(), sender.keys.userId, message), message.signature), false);
+});
+
+test("reactions are a single emoji and message requests stay short", () => {
+  for (const emoji of ["👍", "❤️", "🇩🇪", "👨‍👩‍👧", "1️⃣", "👍🏽"]) assert.ok(validReaction(emoji), emoji);
+  for (const text of ["", "a", "hi", "👍👍", "👍 ", ":+1:"]) assert.ok(!validReaction(text), JSON.stringify(text));
+  assert.equal(requestLimit, 3);
 });

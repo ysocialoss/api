@@ -118,6 +118,8 @@ export const dmConversations = pgTable("dm_conversations", {
   invitedBy: uuid("invited_by"),
   inviteStatus: dmInviteStatus("invite_status").notNull().default("accepted"),
   lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
+  firstHiddenAt: timestamp("first_hidden_at", { withTimezone: true }),
+  secondHiddenAt: timestamp("second_hidden_at", { withTimezone: true }),
 }, (table) => [
   unique("dm_conversations_pair_unique").on(table.firstUserId, table.secondUserId),
   index("dm_conversations_second_user_idx").on(table.secondUserId),
@@ -140,7 +142,16 @@ export const dmMessages = pgTable("dm_messages", {
   envelopes: jsonb().$type<Record<string, string>>().notNull(),
   sequence: bigint({ mode: "bigint" }).generatedAlwaysAsIdentity().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  editedAt: timestamp("edited_at", { withTimezone: true }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
 }, (table) => [unique("dm_messages_conversation_sequence_unique").on(table.conversationId, table.sequence)]);
+
+export const dmReactions = pgTable("dm_reactions", {
+  messageId: uuid("message_id").notNull().references(() => dmMessages.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  emoji: text().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [primaryKey({ columns: [table.messageId, table.userId] })]);
 
 export const oauthTransactions = pgTable("oauth_transactions", {
   state: text().primaryKey(),
