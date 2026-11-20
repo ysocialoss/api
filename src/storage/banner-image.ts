@@ -1,42 +1,87 @@
-import sharp from "sharp";
+import sharp, { type Metadata } from "sharp";
 import { AuthError } from "../auth/provider.ts";
 
 export const bannerUploadLimit = 10 * 1024 * 1024;
-export async function normalizeBanner(input: Buffer) {
+const stillMaxSide = 1600;
+const animatedMaxWidth = 960;
+const animatedKeepBytes = 1024 * 1024;
+
+type Banner = { body: Buffer; extension: string; contentType: string };
+
+async function compress(
+  input: Buffer,
+  metadata: Metadata,
+): Promise<Banner | null> {
+  const pages = metadata.pages ?? 1;
+  if (pages > 1) {
+    const width = metadata.width ?? 0;
+    if (input.length <= animatedKeepBytes && width <= animatedMaxWidth)
+      return null;
+    const body = await sharp(input, {
+      animated: true,
+      limitInputPixels: 40_000_000,
+      failOn: "warning",
+    })
+      .resize({ width: animatedMaxWidth, withoutEnlargement: true })
+      .webp({ quality: 70, effort: 3, loop: metadata.loop })
+      .toBuffer();
+    return { body, extension: "webp", contentType: "image/webp" };
+  }
+  const body = await sharp(input, {
+    limitInputPixels: 40_000_000,
+    failOn: "warning",
+  })
+    .rotate()
+    .resize({
+      width: stillMaxSide,
+      height: stillMaxSide,
+      fit: "inside",
+      withoutEnlargement: true,
+    })
+    .avif({ quality: 60, effort: 4 })
+    .toBuffer();
+  return { body, extension: "avif", contentType: "image/avif" };
+}
+
+export async function normalizeBanner(input: Buffer): Promise<Banner> {
   if (!input.length || input.length > bannerUploadLimit)
     throw new AuthError(400, "invalid_banner");
+  let metadata: Metadata;
   try {
     const image = sharp(input, {
       animated: true,
       limitInputPixels: 40_000_000,
       failOn: "warning",
     });
-    const metadata = await image.metadata();
+    metadata = await image.metadata();
     const avif = metadata.format === "heif" && metadata.compression === "av1";
     if (
       (!avif && !["jpeg", "png", "webp", "gif"].includes(metadata.format)) ||
       (metadata.pages ?? 1) > 120
     )
       throw new Error("Unsupported banner");
-    // Validate the decoded content, but keep the original bytes and animation.
-    const contentType =
+  } catch {
+    throw new AuthError(400, "invalid_banner");
+  }
+  const original: Banner = {
+    body: input,
+    extension:
+      metadata.format === "heif"
+        ? "avif"
+        : metadata.format === "jpeg"
+          ? "jpg"
+          : metadata.format,
+    contentType:
       metadata.format === "jpeg"
         ? "image/jpeg"
         : metadata.format === "heif"
           ? "image/avif"
-          : `image/${metadata.format}`;
-    if (!contentType) throw new Error("Unsupported banner");
-    return {
-      body: input,
-      extension:
-        metadata.format === "heif"
-          ? "avif"
-          : metadata.format === "jpeg"
-            ? "jpg"
-            : metadata.format,
-      contentType,
-    };
+          : `image/${metadata.format}`,
+  };
+  try {
+    const compressed = await compress(input, metadata);
+    if (compressed && compressed.body.length < input.length) return compressed;
   } catch {
-    throw new AuthError(400, "invalid_banner");
   }
+  return original;
 }

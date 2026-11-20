@@ -8,6 +8,16 @@ export type OgPost = {
   author: { handle: string; displayName: string };
 };
 
+export type OgProfile = {
+  handle: string;
+  displayName: string;
+  bio: string;
+  pronouns: string;
+  followerCount: number;
+  followingCount: number;
+  postCount: number;
+};
+
 export const escapeHtml = (value: string) =>
   value
     .replaceAll("&", "&amp;")
@@ -50,7 +60,34 @@ export function postMeta(post: OgPost, origin: string) {
   };
 }
 
-export function metaPage(meta: ReturnType<typeof postMeta>, body: string) {
+export function profileSummary(profile: OgProfile) {
+  const bio = excerpt(profile.bio, 160);
+  if (bio) return bio;
+  const posts = profile.postCount === 1 ? "1 post" : `${profile.postCount} posts`;
+  return `@${profile.handle} on ysocial · ${posts}`;
+}
+
+export function profileMeta(profile: OgProfile, origin: string) {
+  const name = profile.displayName || profile.handle;
+  return {
+    title: `${name} (@${profile.handle}) on ysocial`,
+    description: profileSummary(profile),
+    url: `${origin}/@${profile.handle}`,
+    image: `${origin}/api/og/profiles/${profile.handle}.png`,
+    type: "profile" as const,
+  };
+}
+
+export function metaPage(
+  meta: {
+    title: string;
+    description: string;
+    url: string;
+    image: string;
+    type?: "article" | "profile";
+  },
+  body: string,
+) {
   const title = escapeHtml(meta.title);
   const description = escapeHtml(meta.description);
   const url = escapeHtml(meta.url);
@@ -63,7 +100,7 @@ export function metaPage(meta: ReturnType<typeof postMeta>, body: string) {
 <meta name="description" content="${description}" />
 <link rel="canonical" href="${url}" />
 <meta property="og:site_name" content="ysocial" />
-<meta property="og:type" content="article" />
+<meta property="og:type" content="${meta.type ?? "article"}" />
 <meta property="og:title" content="${title}" />
 <meta property="og:description" content="${description}" />
 <meta property="og:url" content="${url}" />
