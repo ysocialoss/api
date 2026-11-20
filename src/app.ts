@@ -6,7 +6,8 @@ import voices from "./voices.ts";
 import { startVoiceJobs } from "./storage/voice-jobs.ts";
 import { checkAvatarStorage } from "./storage/r2.ts";
 import profiles from "./profiles.ts";
-import github, { startGithubRefresh } from "./github.ts";
+import github from "./github.ts";
+import { startGithubRefresh } from "./github-contribution-jobs.ts";
 import posts from "./posts.ts";
 import og from "./og.ts";
 import live from "./live.ts";
@@ -169,7 +170,8 @@ if (import.meta.main) {
       to_regclass('public.auth_identities') IS NOT NULL AND
       to_regclass('public.oauth_transactions') IS NOT NULL AND
       to_regclass('public.github_connections') IS NOT NULL AND
-      to_regclass('public.github_link_attempts') IS NOT NULL AS ready`);
+      to_regclass('public.github_link_attempts') IS NOT NULL AND
+      to_regclass('public.github_contribution_jobs') IS NOT NULL AS ready`);
     if (!schema.rows[0]?.ready) {
       throw new Error(
         "Database schema is missing. Run pnpm db:migrate in api/ before starting the API.",

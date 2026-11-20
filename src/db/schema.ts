@@ -114,6 +114,15 @@ export const githubConnections = pgTable("github_connections", {
   index("github_connections_attempted_idx").on(table.attemptedAt),
 ]);
 
+export const githubContributionJobs = pgTable("github_contribution_jobs", {
+  connectionId: uuid("connection_id").primaryKey()
+    .references(() => githubConnections.id, { onDelete: "cascade" }),
+  runAt: timestamp("run_at", { withTimezone: true }).notNull().defaultNow(),
+  lease: uuid(),
+}, (table) => [
+  index("github_contribution_jobs_due_idx").on(table.runAt, table.connectionId),
+]);
+
 export const authIdentities = pgTable(
   "auth_identities",
   {

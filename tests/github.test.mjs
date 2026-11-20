@@ -29,6 +29,7 @@ test("GitHub links are session-bound and publish only verified contribution data
     });
     database = await import("../src/db/index.ts");
     const { app } = await import("../src/app.ts");
+    const { processGithubContributionJob } = await import("../src/github-contribution-jobs.ts");
     const { hash } = await import("../src/auth/secrets.ts");
     await migrate(database.db, {
       migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)),
@@ -63,6 +64,8 @@ test("GitHub links are session-bound and publish only verified contribution data
     let exchanged = 0;
     let failSearch = true;
     let login = "first-login";
+    let holdIdentity;
+    let identityReads = 0;
     t.mock.method(globalThis, "fetch", (input, options) => {
       const target = new URL(input);
       const { hostname, pathname, searchParams } = target;
@@ -79,7 +82,15 @@ test("GitHub links are session-bound and publish only verified contribution data
         return Response.json({ id: 42, login });
       }
       assert.equal(options.headers.Authorization, "Bearer github-public-test-token");
-      if (pathname === "/user/42") return Response.json({ id: 42, login });
+      if (pathname === "/user/42") {
+        identityReads++;
+        const response = Response.json({ id: 42, login });
+        if (!holdIdentity) return response;
+        const gate = holdIdentity;
+        holdIdentity = undefined;
+        gate.entered.resolve();
+        return gate.release.promise.then(() => response);
+      }
       if (pathname === "/orgs/ysocialoss/repos") return Response.json([
         { name: "web", private: false, owner: { login: "ysocialoss" }, fork: false },
         { name: "api", private: false, owner: { login: "ysocialoss" }, fork: false },
@@ -174,7 +185,44 @@ test("GitHub links are session-bound and publish only verified contribution data
     assert.equal((await call("/api/github/refresh", { method: "POST", headers: owner.headers })).status, 502);
     assert.deepEqual((await publicProfile()).github, github);
 
+    const { rows: [queued] } = await database.pool.query(
+      "SELECT lease, run_at > now() + interval '9 minutes' AS retry_scheduled FROM github_contribution_jobs",
+    );
+    assert.deepEqual(queued, { lease: null, retry_scheduled: true });
+    assert.equal(await processGithubContributionJob(), undefined, "workers respect the persisted retry time");
+
+    async function makeJobDue() {
+      await database.pool.query("UPDATE github_connections SET attempted_at = now() - interval '3 minutes'");
+      await database.pool.query("UPDATE github_contribution_jobs SET run_at = now() - interval '1 second'");
+    }
+    await makeJobDue();
+    failSearch = false;
+    const gate = { entered: Promise.withResolvers(), release: Promise.withResolvers() };
+    holdIdentity = gate;
+    const stalledWorker = processGithubContributionJob();
+    try {
+      await Promise.race([gate.entered.promise, stalledWorker.then(() => assert.fail("job was not claimed"))]);
+      const readsBeforeRetry = identityReads;
+      assert.equal(await processGithubContributionJob(), undefined, "another worker cannot claim a live lease");
+      assert.equal(identityReads, readsBeforeRetry);
+      const manualRefresh = await call("/api/github/refresh", { method: "POST", headers: owner.headers });
+      assert.equal(manualRefresh.status, 429, "manual refresh uses the same lease");
+
+      await makeJobDue();
+      assert.deepEqual(await processGithubContributionJob(), github, "another worker recovers an expired lease");
+      gate.release.resolve();
+      assert.equal(await stalledWorker, undefined, "a replaced worker cannot publish its result");
+    } finally {
+      gate.release.resolve();
+      await stalledWorker;
+    }
+    const { rows: [scheduled] } = await database.pool.query(
+      "SELECT lease, run_at > now() + interval '23 hours' AS refresh_scheduled FROM github_contribution_jobs",
+    );
+    assert.deepEqual(scheduled, { lease: null, refresh_scheduled: true });
+
     assert.equal((await call("/api/github", { method: "DELETE", headers: owner.headers })).status, 204);
+    assert.equal((await database.pool.query("SELECT 1 FROM github_contribution_jobs")).rowCount, 0);
     const profile = await publicProfile();
     assert.equal(profile.github, null);
     assert.equal(profile.badges[0].tooltip, "Bug hunter");

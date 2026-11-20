@@ -1,20 +1,17 @@
 import { Router } from "express";
-import { and, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
+import { and, eq, gt } from "drizzle-orm";
 import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
 import { cookie, requireApprovedUser, requireUser } from "./auth/request.ts";
 import { hash, random } from "./auth/secrets.ts";
-import { env } from "./config.ts";
 import { db } from "./db/index.ts";
 import { githubConnections, githubLinkAttempts, users } from "./db/schema.ts";
-import { exchangeGithubCode, githubAuthorizeUrl, githubConfigured, readGithubContributions } from "./github-provider.ts";
+import { exchangeGithubCode, githubAuthorizeUrl, githubConfigured } from "./github-provider.ts";
+import { processGithubContributionJob, reportGithubRefreshFailure } from "./github-contribution-jobs.ts";
 import { githubProfileSelection } from "./user-data.ts";
 
 const router = Router();
 const attemptLength = 10 * 60_000;
-const refreshCooldown = 60_000;
-const automaticRefreshInterval = 24 * 60 * 60_000;
-const automaticRefreshTick = (env.GITHUB_PUBLIC_READ_TOKEN ? 1 : 10) * 60_000;
 const connectInput = z.strictObject({ returnTo: z.literal("profile").optional() }).optional();
 const profileStatePrefix = "profile.";
 
@@ -100,8 +97,9 @@ router.get("/callback", async (req, res) => {
       return linked;
     });
     if (!connection) throw new AuthError(409, "github_account_taken");
-    // The connection is valid even if GitHub's public contribution APIs fail.
-    await refreshConnection(connection.id).catch(reportRefreshFailure);
+    // The database already queued the job with the connection, so another
+    // pod can finish it if this initial attempt fails or is interrupted.
+    await processGithubContributionJob(connection.id).catch(reportGithubRefreshFailure);
     redirect("connected");
   } catch (error) {
     if (!(error instanceof AuthError || error instanceof z.ZodError))
@@ -127,56 +125,9 @@ router.post("/refresh", async (req, res) => {
   const [connection] = await db.select({ id: githubConnections.id }).from(githubConnections)
     .where(eq(githubConnections.userId, id));
   if (!connection) throw new AuthError(404, "github_not_connected");
-  const github = await refreshConnection(connection.id);
+  const github = await processGithubContributionJob(connection.id);
   if (!github) throw new AuthError(429, "github_refresh_too_soon");
   res.json({ github });
 });
-
-async function refreshConnection(id: string) {
-  const now = new Date();
-  const [claimed] = await db.update(githubConnections).set({ attemptedAt: now })
-    .where(and(
-      eq(githubConnections.id, id),
-      or(isNull(githubConnections.attemptedAt), lt(githubConnections.attemptedAt, new Date(now.getTime() - refreshCooldown))),
-    )).returning({ githubId: githubConnections.githubId });
-  if (!claimed) return;
-
-  const result = await readGithubContributions(claimed.githubId).catch(() => {
-    throw new AuthError(502, "github_unavailable");
-  });
-  const [updated] = await db.update(githubConnections).set({ ...result, checkedAt: new Date() })
-    .where(eq(githubConnections.id, id)).returning(githubProfileSelection);
-  return updated;
-}
-
-function reportRefreshFailure() {
-  console.warn({ event: "github_contribution_refresh_failed" });
-}
-
-export function startGithubRefresh() {
-  if (!githubConfigured) return () => {};
-  let running = false;
-  async function refreshDueConnection() {
-    if (running) return;
-    running = true;
-    try {
-      const [connection] = await db.select({ id: githubConnections.id }).from(githubConnections)
-        .where(and(
-          or(isNull(githubConnections.checkedAt), lt(githubConnections.checkedAt, new Date(Date.now() - automaticRefreshInterval))),
-          or(isNull(githubConnections.attemptedAt), lt(githubConnections.attemptedAt, new Date(Date.now() - attemptLength))),
-        ))
-        .orderBy(sql`${githubConnections.attemptedAt} asc nulls first`).limit(1);
-      if (connection) await refreshConnection(connection.id);
-    } catch {
-      reportRefreshFailure();
-    } finally {
-      running = false;
-    }
-  }
-  void refreshDueConnection();
-  const timer = setInterval(refreshDueConnection, automaticRefreshTick);
-  timer.unref();
-  return () => clearInterval(timer);
-}
 
 export default router;
