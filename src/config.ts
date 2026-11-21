@@ -8,6 +8,7 @@ config({ path: new URL("../.env", import.meta.url), quiet: true });
 export const env = z
   .object({
     KLIPY_API_KEY: z.string().optional(),
+    NSFW_CHECK_URL: z.url({ protocol: /^https?$/ }).optional(),
     R2: z.preprocess(() => process.env, r2ConfigSchema),
     PUSH: z.preprocess(() => process.env, pushConfigSchema),
     DATABASE_URL: z
