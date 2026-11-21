@@ -10,6 +10,7 @@ import {
   check,
   customType,
   boolean,
+  doublePrecision,
   pgEnum,
   integer,
   jsonb,
@@ -267,6 +268,7 @@ export const posts = pgTable(
     content: text().notNull(),
     gif: jsonb().$type<KlipyGif>(),
     voice: jsonb().$type<Voice>(),
+    imageIds: uuid("image_ids").array().notNull().default(sql`'{}'::uuid[]`),
     poll: jsonb().$type<PollDefinition>(),
     createdAt: timestamp("created_at", { withTimezone: true, precision: 3 })
       .notNull()
@@ -289,10 +291,36 @@ export const posts = pgTable(
     index("posts_content_search_idx").using("gin", sql`to_tsvector('simple', ${table.content})`),
     check(
       "posts_content_check",
-      sql`char_length(${table.content}) <= 2000 AND (${table.content} ~ '[^[:space:]]' OR (${table.content} = '' AND (${table.gif} IS NOT NULL OR ${table.poll} IS NOT NULL OR ${table.voice} IS NOT NULL)))`,
+      sql`char_length(${table.content}) <= 2000 AND (${table.content} ~ '[^[:space:]]' OR (${table.content} = '' AND (${table.gif} IS NOT NULL OR ${table.poll} IS NOT NULL OR ${table.voice} IS NOT NULL OR cardinality(${table.imageIds}) > 0)))`,
     ),
   ],
 );
+
+export const postImages = pgTable("post_images", {
+  id: uuid().defaultRandom().primaryKey(),
+  uploaderId: uuid("uploader_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  postId: uuid("post_id").references(() => posts.id, { onDelete: "cascade" }),
+  data: dmBlob().notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (table) => [
+  index("post_images_post_idx").on(table.postId),
+  index("post_images_draft_uploader_idx").on(table.uploaderId).where(sql`${table.postId} IS NULL`),
+  index("post_images_draft_expiry_idx").on(table.expiresAt).where(sql`${table.postId} IS NULL`),
+]);
+
+export const postImageFlags = pgTable("post_image_flags", {
+  id: uuid().defaultRandom().primaryKey(),
+  uploaderId: uuid("uploader_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  filename: text(),
+  confidence: doublePrecision(),
+  data: dmBlob(),
+  objectKey: text("object_key").unique(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("post_image_flags_created_idx").on(table.createdAt.desc(), table.id.desc()),
+  index("post_image_flags_uploader_idx").on(table.uploaderId),
+  check("post_image_flags_one_image", sql`num_nonnulls(${table.data}, ${table.objectKey}) = 1`),
+]);
 
 export const pollVotes = pgTable(
   "poll_votes",

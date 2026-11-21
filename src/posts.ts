@@ -36,6 +36,7 @@ import {
   postReposts,
   postTopics,
   posts,
+  postImages,
   mediaDeletions,
   users,
 } from "./db/schema.ts";
@@ -48,6 +49,7 @@ import { postFilterConditions, postMatchesSql, readPostFilters, readSearchQuery 
 import { extractTopics } from "./topics-text.ts";
 import { affectedPostIds, publishLiveChange, publishLivePost } from "./live-events.ts";
 import { removePost } from "./post-removal.ts";
+import { maxPostImages } from "./post-images.ts";
 
 import { syncMentions } from "./mentions.ts";
 import { attachSelfReplies } from "./self-replies.ts";
@@ -81,15 +83,18 @@ const createSchema = contentSchema
   .extend({
     content: contentSchema.shape.content.default(""),
     clientId: z.uuid().optional(),
-    // Preserve compatibility with callers that send an empty attachment list.
-    attachmentIds: z.array(z.uuid()).max(0).optional(),
+    attachmentIds: z.array(z.uuid().transform((id) => id.toLowerCase()))
+      .max(maxPostImages)
+      .refine((ids) => new Set(ids).size === ids.length)
+      .default([]),
     gifToken: z.string().min(1).max(4096).optional(),
     voiceToken: z.string().min(1).max(4096).optional(),
     poll: pollDefinitionSchema.optional(),
     // Makes this a quote post: a new top-level post that embeds the quoted one.
     quotedPostId: z.uuid().optional(),
   })
-  .refine(({ content, gifToken, poll, voiceToken }) => Boolean(content || gifToken || poll || voiceToken));
+  .refine(({ content, gifToken, poll, voiceToken, attachmentIds }) =>
+    Boolean(content || gifToken || poll || voiceToken || attachmentIds.length));
 const cursorSchema = z.strictObject({
   createdAt: z.iso.datetime(),
   id: z.uuid(),
@@ -161,6 +166,7 @@ async function createPost({
             content: input.content,
             gif,
             voice,
+            imageIds: input.attachmentIds,
             poll: input.poll,
             parentId,
             quotedPostId,
@@ -169,6 +175,20 @@ async function createPost({
           .onConflictDoNothing({ target: posts.id })
           .returning({ id: posts.id });
     if (saved) {
+      if (input.attachmentIds.length) {
+        const claimable = and(
+          inArray(postImages.id, input.attachmentIds),
+          eq(postImages.uploaderId, userId),
+          isNull(postImages.postId),
+          gt(postImages.expiresAt, new Date()),
+        );
+        const images = await tx.select({ id: postImages.id }).from(postImages)
+          .where(claimable).orderBy(postImages.id).for("update");
+        if (images.length !== input.attachmentIds.length)
+          throw new AuthError(400, "invalid_post_image_selection");
+        await tx.update(postImages).set({ postId: saved.id })
+          .where(inArray(postImages.id, images.map(({ id }) => id)));
+      }
       if (voice) await tx.delete(mediaDeletions).where(eq(mediaDeletions.key, voice.key));
       await syncMentions(tx, saved.id, userId, input.content);
       await syncPostTopics(tx, saved.id, input.content);
@@ -220,6 +240,7 @@ async function createPost({
         content: posts.content,
         gif: posts.gif,
         voice: posts.voice,
+        imageIds: posts.imageIds,
         poll: posts.poll,
       })
       .from(posts)
@@ -236,6 +257,7 @@ async function createPost({
       existing.content !== input.content ||
       existing.gif?.url !== gif?.url ||
       existing.voice?.key !== voice?.key ||
+      !isDeepStrictEqual(existing.imageIds, input.attachmentIds) ||
       savedPoll?.title !== input.poll?.title ||
       savedPoll?.anonymous !== input.poll?.anonymous ||
       !isDeepStrictEqual(savedPoll?.options, input.poll?.options)
@@ -852,6 +874,7 @@ router.patch("/:id", async (req, res) => {
         content: posts.content,
         gif: posts.gif,
         voice: posts.voice,
+        imageIds: posts.imageIds,
         poll: posts.poll,
         createdAt: posts.createdAt,
         editedAt: posts.editedAt,
@@ -862,7 +885,7 @@ router.patch("/:id", async (req, res) => {
     if (!existing) throw new AuthError(404, "post_not_found");
     if (existing.authorId !== user.id)
       throw new AuthError(403, "not_post_author");
-    if (!parsed.data.content && !existing.gif && !existing.poll && !existing.voice)
+    if (!parsed.data.content && !existing.gif && !existing.poll && !existing.voice && !existing.imageIds.length)
       throw new AuthError(400, "invalid_content");
     const [saved] = await tx
       .update(posts)
