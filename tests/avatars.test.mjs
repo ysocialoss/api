@@ -729,15 +729,13 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
         );
         const still = await uploadBanner(picture, "image/png");
         assert.equal(still.response.status, 200);
-        assert.match(still.data.bannerUrl, /\.png$/);
-        assert.deepEqual(
-          Buffer.from(
-            await fetch(`${origin}${still.data.bannerUrl}`).then((res) =>
-              res.arrayBuffer(),
-            ),
-          ),
-          picture,
-        );
+        assert.match(still.data.bannerUrl, /\.avif$/);
+        const stillResponse = await fetch(`${origin}${still.data.bannerUrl}`);
+        const stillBody = Buffer.from(await stillResponse.arrayBuffer());
+        assert.ok(stillBody.length < picture.length);
+        const stillMetadata = await sharp(stillBody).metadata();
+        assert.equal(stillMetadata.width, 800);
+        assert.equal(stillMetadata.height, 600);
         const gif = await readFile(
           new URL("./fixtures/banner.gif", import.meta.url),
         );

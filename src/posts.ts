@@ -51,6 +51,7 @@ import { removePost } from "./post-removal.ts";
 
 import { syncMentions } from "./mentions.ts";
 import { attachSelfReplies } from "./self-replies.ts";
+import { easterEggGif, easterEggToken } from "./easter-egg.ts";
 import { readGifSelection } from "./storage/klipy.ts";
 import { pollDefinitionSchema } from "./poll-schema.ts";
 import { flushMediaDeletions } from "./storage/media-lifecycle.ts";
@@ -113,7 +114,11 @@ async function createPost({
   parentId?: string | null;
   quotedPostId?: string | null;
 }) {
-  const selection = input.gifToken ? readGifSelection(input.gifToken, userId) : null;
+  const selection = !input.gifToken
+    ? null
+    : input.gifToken === easterEggToken
+      ? { gif: easterEggGif, expires: Infinity }
+      : readGifSelection(input.gifToken, userId);
   const gif = selection?.gif ?? null;
   const voiceSelection = input.voiceToken ? readVoiceSelection(input.voiceToken, userId) : null;
   const voice = voiceSelection?.voice ?? null;
