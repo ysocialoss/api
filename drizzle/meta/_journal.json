@@ -386,6 +386,13 @@
       "when": 1795306932913,
       "tag": "0054_user_blocks",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1795363373684,
+      "tag": "0055_connections",
+      "breakpoints": true
     }
   ]
 }

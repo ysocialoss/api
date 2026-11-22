@@ -38,6 +38,10 @@ export const env = z
     GITHUB_CLIENT_ID: z.string().optional(),
     GITHUB_CLIENT_SECRET: z.string().optional(),
     GITHUB_PUBLIC_READ_TOKEN: z.string().optional(),
+    DISCORD_CLIENT_ID: z.string().optional(),
+    DISCORD_CLIENT_SECRET: z.string().optional(),
+    TWITCH_CLIENT_ID: z.string().optional(),
+    TWITCH_CLIENT_SECRET: z.string().optional(),
     SESSION_ENCRYPTION_KEY: z.preprocess(
       (value) => (value === "" ? undefined : value),
       z

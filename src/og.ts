@@ -4,7 +4,7 @@ import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
 import { env } from "./config.ts";
 import { db } from "./db/index.ts";
-import { posts, userHandles, users } from "./db/schema.ts";
+import { userHandles, users } from "./db/schema.ts";
 import { findPost } from "./posts.ts";
 import { avatarDataUri, renderPostCard } from "./og/post-card.ts";
 import { renderProfileCard } from "./og/profile-card.ts";
@@ -18,7 +18,7 @@ import {
   type OgProfile,
 } from "./og/text.ts";
 import { getAvatar } from "./storage/r2.ts";
-import { publicProfileSelection, userSelection } from "./user-data.ts";
+import { postCountSelection, publicProfileSelection, userSelection } from "./user-data.ts";
 
 const router = Router();
 
@@ -50,7 +50,7 @@ async function findOgProfile(
       pronouns: publicProfileSelection.pronouns,
       followerCount: publicProfileSelection.followerCount,
       followingCount: publicProfileSelection.followingCount,
-      postCount: sql<number>`(select count(*)::int from ${posts} where ${posts.authorId} = ${users.id} and ${posts.parentId} is null)`,
+      postCount: postCountSelection,
     })
     .from(users)
     .where(
