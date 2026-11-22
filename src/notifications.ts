@@ -17,6 +17,7 @@ import { endpointSchema, subscriptionSchema } from "./push-config.ts";
 import { userSelection } from "./user-data.ts";
 import { notificationPreview } from "./notification-content.ts";
 import { visiblePostAuthor } from "./post-data.ts";
+import { notBlockedSql } from "./blocks.ts";
 import { publishDmChange } from "./dm-events.ts";
 
 const router = Router();
@@ -62,6 +63,7 @@ router.get("/", async (req, res) => {
       chatPreview: sql<boolean>`not ${hideContent}::boolean and ${notifications.kind} = 'dm_message'`,
       hasGif: sql<boolean>`${posts.gif} IS NOT NULL`,
       hasVoice: sql<boolean>`${posts.voice} IS NOT NULL`,
+      imageIds: sql<string[]>`case when ${hideContent}::boolean or ${posts.imageIds} is null then '{}'::uuid[] else ${posts.imageIds} end`,
       readAt: notifications.readAt,
       createdAt: notifications.createdAt,
       actor: userSelection,
@@ -73,6 +75,7 @@ router.get("/", async (req, res) => {
       and(
         eq(notifications.recipientId, userId),
         visibleKind,
+        notBlockedSql(userId, notifications.actorId),
         unread ? isNull(notifications.readAt) : undefined,
         cursor
           ? or(

@@ -6,6 +6,7 @@ import {
   pushSubscriptions,
 } from "./db/schema.ts";
 import { env } from "./config.ts";
+import { blockState } from "./blocks.ts";
 
 type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Event = Pick<
@@ -16,6 +17,8 @@ type Event = Pick<
 // Call in the action's transaction. Failed or replayed actions never fan out.
 export async function recordNotification(tx: Transaction, event: Event) {
   if (event.recipientId === event.actorId) return;
+  const state = await blockState(tx, event.recipientId, event.actorId);
+  if (state.blocking || state.blockedBy) return;
   const [saved] = await tx
     .insert(notifications)
     .values(event)
