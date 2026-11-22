@@ -20,6 +20,7 @@ export const postFields = {
   content: posts.content,
   gif: posts.gif,
   voice: posts.voice,
+  imageIds: posts.imageIds,
   createdAt: posts.createdAt,
   editedAt: posts.editedAt,
 };
@@ -62,6 +63,7 @@ export type QuotedPost = {
   id: string;
   content: string;
   gif: { url: string; title: string } | null;
+  imageIds: string[];
   createdAt: string;
   editedAt: string | null;
   parentId: string | null;
@@ -78,7 +80,7 @@ export const quoteSelection = {
   quote: sql<PostQuote | null>`case when ${posts.isQuote} then (
     coalesce((
       select jsonb_build_object('state', 'available', 'post', jsonb_build_object(
-        'id', q.id, 'content', q.content, 'gif', q.gif,
+        'id', q.id, 'content', q.content, 'gif', q.gif, 'imageIds', q.image_ids,
         'createdAt', q.created_at, 'editedAt', q.edited_at, 'parentId', q.parent_id,
         'pollTitle', q.poll->>'title', 'isQuote', q.is_quote,
         'mentions', (select coalesce(jsonb_agg(jsonb_build_object('id', mu.id, 'handle', mu.handle, 'username', qm.handle)), '[]'::jsonb)

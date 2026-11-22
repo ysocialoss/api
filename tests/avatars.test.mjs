@@ -182,6 +182,26 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
       );
     }
     let firstUrl;
+    const voicePollHeaders = { Cookie: headers.Cookie };
+    async function waitForVoiceJob(id) {
+      const signal = AbortSignal.timeout(20_000);
+      const path = `${origin}/api/voices/jobs/${id}`;
+      for (;;) {
+        const response = await fetch(path, { headers: voicePollHeaders, signal });
+        if (response.status !== 202) return response;
+        assert.deepEqual(await response.json(), { pending: true, jobId: id });
+        await delay(100, undefined, { signal });
+      }
+    }
+
+    async function finishVoiceUpload(response) {
+      if (response.status !== 202) return response;
+      const pending = await response.json();
+      assert.equal(pending.pending, true);
+      assert.match(pending.jobId, /^[0-9a-f-]{36}$/i);
+      return waitForVoiceJob(pending.jobId);
+    }
+
     await t.test("voice uploads, posts, replies, retries, range playback and deletion", async () => {
       async function voiceUpload(body, overrides = {}) {
         return fetch(`${origin}/api/voices`, {
@@ -195,17 +215,22 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
         });
       }
       const wav = makeVoiceWav(3);
+      async function uploadDraft() {
+        const initial = await voiceUpload(wav);
+        const response = await finishVoiceUpload(initial);
+        assert.equal(response.status, initial.status === 202 ? 200 : 201);
+        const draft = await response.json();
+        uploaded.push(draft.key);
+        return draft;
+      }
       assert.equal((await voiceUpload(wav, { Cookie: "" })).status, 401);
       assert.equal((await voiceUpload(wav, { Origin: "https://other.invalid" })).status, 403);
       assert.equal((await voiceUpload(wav, { "Content-Type": "text/plain" })).status, 415);
       assert.equal((await voiceUpload(Buffer.alloc(8 * 1024 * 1024 + 1))).status, 413);
-      const short = await voiceUpload(makeVoiceWav(1));
+      const short = await finishVoiceUpload(await voiceUpload(makeVoiceWav(1)));
       assert.equal(short.status, 400);
       assert.equal((await short.json()).error, "voice_too_short");
-      const response = await voiceUpload(wav);
-      assert.equal(response.status, 201);
-      const voice = await response.json();
-      uploaded.push(voice.key);
+      const voice = await uploadDraft();
       assert.equal(voice.durationMs, 3000);
       assert.equal(voice.waveform.length, 48);
       assert.ok(voice.waveform.some((level) => level > 0));
@@ -243,9 +268,7 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
       assert.equal((await fetch(origin + voice.url, { headers: { Range: `bytes=${voice.bytes + 1}-` } })).status, 416);
       assert.equal((await postRequest(`/api/posts/${post.id}`, { content: "Caption" }, "PATCH")).status, 200);
       assert.equal((await postRequest(`/api/posts/${post.id}`, { content: "" }, "PATCH")).status, 200);
-      const nextVoiceResponse = await voiceUpload(wav);
-      const nextVoice = await nextVoiceResponse.json();
-      uploaded.push(nextVoice.key);
+      const nextVoice = await uploadDraft();
       const replied = await postRequest(`/api/posts/${post.id}/replies`, { voiceToken: nextVoice.token });
       assert.equal(replied.status, 201);
       const reply = (await replied.json()).post;
@@ -267,8 +290,7 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
       await assertObjectDeleted(voice.key);
       await assertObjectDeleted(nextVoice.key);
       for (const action of ["discard", "expire"]) {
-        const draft = await (await voiceUpload(wav)).json();
-        uploaded.push(draft.key);
+        const draft = await uploadDraft();
         const { rows: [pending] } = await pool.query("SELECT available_at FROM media_deletions WHERE key = $1", [draft.key]);
         const remaining = pending.available_at.getTime() - Date.now();
         assert.ok(remaining > 29 * 60 * 1000 && remaining <= 30 * 60 * 1000);
@@ -301,7 +323,7 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
           method: "POST",
           headers: { ...headers, "Content-Type": "audio/wav", "Idempotency-Key": id },
           body: makeVoiceWav(3),
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(20_000),
         });
         assert.equal(upload.status, 202);
         assert.deepEqual(await upload.json(), { pending: true, jobId: id });
@@ -310,14 +332,8 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
         releaseWrite();
         holdVoiceWrite = undefined;
       }
-      let response;
-      for (let attempt = 0; attempt < 30; attempt++) {
-        response = await fetch(path, { headers: { Cookie: headers.Cookie } });
-        if (response.status !== 202) break;
-        await response.arrayBuffer();
-        await delay(100);
-      }
-      assert.equal(response?.status, 200);
+      const response = await waitForVoiceJob(id);
+      assert.equal(response.status, 200);
       uploaded.push((await response.json()).key);
       assert.equal((await fetch(path, { method: "DELETE", headers })).status, 204);
     });
@@ -328,7 +344,7 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
       const wav = makeVoiceWav(3);
       await pool.query(
         `INSERT INTO voice_jobs (user_id, id, input, lease, next_attempt_at, expires_at)
-         VALUES ($1, $2, $3, $4, now() + interval '1 second', now() + interval '30 minutes')`,
+         VALUES ($1, $2, $3, $4, now() + interval '30 minutes', now() + interval '30 minutes')`,
         [alice.id, id, wav, randomUUID()],
       );
       const path = `${origin}/api/voices/jobs/${id}`;
@@ -342,10 +358,9 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
       assert.deepEqual(await pending.json(), { pending: true, jobId: id });
 
       // A browser's same-origin GET sends the session cookie without an Origin header.
-      const pollHeaders = { Cookie: headers.Cookie };
       assert.equal((await fetch(path)).status, 401);
-      assert.equal((await fetch(path, { headers: pollHeaders })).status, 202);
-      assert.equal((await fetch(path, { method: "DELETE", headers: pollHeaders })).status, 403);
+      assert.equal((await fetch(path, { headers: voicePollHeaders })).status, 202);
+      assert.equal((await fetch(path, { method: "DELETE", headers: voicePollHeaders })).status, 403);
 
       const { rows: [otherIdentity] } = await pool.query(
         "INSERT INTO auth_identities (issuer, subject, user_id) VALUES ('https://test.invalid', 'bob', $1) RETURNING id",
@@ -359,16 +374,14 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
       const otherHeaders = { Cookie: `session=${otherToken}` };
       assert.equal((await fetch(path, { headers: otherHeaders })).status, 404);
 
+      await pool.query(
+        "UPDATE voice_jobs SET next_attempt_at = now() - interval '1 second' WHERE user_id = $1 AND id = $2",
+        [alice.id, id],
+      );
       const stopWorkers = [startVoiceJobs(), startVoiceJobs()];
       try {
-        let response;
-        for (let attempt = 0; attempt < 30; attempt++) {
-          response = await fetch(path, { headers: pollHeaders });
-          if (response.status !== 202) break;
-          await response.arrayBuffer();
-          await delay(250);
-        }
-        assert.equal(response?.status, 200);
+        const response = await waitForVoiceJob(id);
+        assert.equal(response.status, 200);
         const voice = await response.json();
         assert.equal((await fetch(path, { headers: otherHeaders })).status, 404);
         uploaded.push(voice.key);
@@ -716,15 +729,13 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
         );
         const still = await uploadBanner(picture, "image/png");
         assert.equal(still.response.status, 200);
-        assert.match(still.data.bannerUrl, /\.png$/);
-        assert.deepEqual(
-          Buffer.from(
-            await fetch(`${origin}${still.data.bannerUrl}`).then((res) =>
-              res.arrayBuffer(),
-            ),
-          ),
-          picture,
-        );
+        assert.match(still.data.bannerUrl, /\.avif$/);
+        const stillResponse = await fetch(`${origin}${still.data.bannerUrl}`);
+        const stillBody = Buffer.from(await stillResponse.arrayBuffer());
+        assert.ok(stillBody.length < picture.length);
+        const stillMetadata = await sharp(stillBody).metadata();
+        assert.equal(stillMetadata.width, 800);
+        assert.equal(stillMetadata.height, 600);
         const gif = await readFile(
           new URL("./fixtures/banner.gif", import.meta.url),
         );

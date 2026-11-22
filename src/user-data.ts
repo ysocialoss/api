@@ -1,12 +1,11 @@
-import {
-  getTableName,
-  type SQL,
-  sql,
-  type SQLWrapper,
-  type Table,
-} from "drizzle-orm";
-import { authIdentities, userFollows, paints, users } from "./db/schema.ts";
+import { getTableName, type SQL, sql, type SQLWrapper, type Table } from "drizzle-orm";
+import { authIdentities, githubConnections, paints, posts, userFollows, users } from "./db/schema.ts";
 import type { PaintDefinition } from "./paint-schema.ts";
+
+export const githubProfileSelection = {
+  login: githubConnections.login,
+  contributionCount: githubConnections.contributionCount,
+};
 
 type AvatarUserTable = Table & {
   id: { name: string };
@@ -59,6 +58,8 @@ export const banDetailsSelection = {
     order by a.created_at desc, a.id desc limit 1
   ) end`,
 };
+
+export const postCountSelection = sql<number>`(select count(*)::int from ${posts} where ${posts.authorId} = ${sql.identifier(getTableName(users))}.${sql.identifier(users.id.name)} and ${posts.parentId} is null)`;
 
 export const publicProfileSelection = {
   bio: users.bio,

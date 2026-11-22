@@ -1,4 +1,5 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { notBlockedSql } from "./blocks.ts";
 import { db } from "./db/index.ts";
 import { posts, users } from "./db/schema.ts";
 import { postSelection, repostVisibleSql, serializePost } from "./post-data.ts";
@@ -68,10 +69,12 @@ export async function homeFeed(
       select r.user_id, r.created_at, r.audience, count(*) over () - 1 as n
       from post_reposts r join users reposter on reposter.id = r.user_id
       where r.post_id = p.id and reposter.banned_at is null and ${repostVisibleSql(viewerId)}
+        ${viewerId ? sql`and ${notBlockedSql(viewerId, sql`r.user_id`)}` : sql``}
       order by r.created_at desc, r.user_id desc
       limit 1
     ) lr on true
     where (p.parent_id is null or lr.user_id is not null)
+      ${viewerId ? sql`and ${notBlockedSql(viewerId, sql`p.author_id`)}` : sql``}
       ${
         cursor
           ? sql`and (${activity} < ${cursor.createdAt}::timestamptz

@@ -7,8 +7,16 @@ process.env.DATABASE_URL = "postgres://og:og@localhost/og";
 process.env.KLIPY_API_KEY = "og-test-key";
 
 const { renderPostCard } = await import("../src/og/post-card.ts");
-const { excerpt, metaPage, postMeta, postSummary, stripUnrenderable } =
-  await import("../src/og/text.ts");
+const { renderProfileCard } = await import("../src/og/profile-card.ts");
+const {
+  excerpt,
+  metaPage,
+  postMeta,
+  postSummary,
+  profileMeta,
+  profileSummary,
+  stripUnrenderable,
+} = await import("../src/og/text.ts");
 const { app } = await import("../src/app.ts");
 
 const post = {
@@ -19,6 +27,16 @@ const post = {
   gif: null,
   voice: null,
   author: { handle: "aaron", displayName: "Aaron" },
+};
+
+const profile = {
+  handle: "aaron",
+  displayName: "Aaron <b>",
+  bio: "Builds <things>",
+  pronouns: "he/him",
+  followerCount: 1234,
+  followingCount: 5,
+  postCount: 1,
 };
 
 await test("image text keeps supported scripts and drops the rest", () => {
@@ -62,6 +80,43 @@ await test("routes reject malformed post ids before touching the database", asyn
   try {
     const base = `http://127.0.0.1:${server.address().port}/api/og/posts`;
     for (const path of ["nope", "nope.png", "../x"]) {
+      const response = await fetch(`${base}/${path}`);
+      assert.equal(response.status, 404, path);
+    }
+  } finally {
+    server.close();
+    server.closeAllConnections();
+  }
+});
+
+await test("profile meta page points at the profile and its own image", () => {
+  const meta = profileMeta(profile, "https://ysocial.cc");
+  const html = metaPage(meta, profileSummary(profile));
+  assert.ok(html.includes('<meta property="og:type" content="profile" />'));
+  assert.ok(html.includes('content="https://ysocial.cc/api/og/profiles/aaron.png"'));
+  assert.ok(html.includes('<link rel="canonical" href="https://ysocial.cc/@aaron" />'));
+  assert.ok(!html.includes("<b>") && !html.includes("<things>"));
+  assert.equal(
+    profileSummary({ ...profile, bio: "" }),
+    "@aaron on ysocial · 1 post",
+  );
+});
+
+await test("renders a 1200x630 profile PNG with and without a bio", async () => {
+  for (const input of [profile, { ...profile, bio: "", pronouns: "", displayName: "日本語" }]) {
+    const png = await renderProfileCard(input);
+    assert.equal(png.subarray(1, 4).toString(), "PNG");
+    assert.equal(png.readUInt32BE(16), 1200);
+    assert.equal(png.readUInt32BE(20), 630);
+  }
+});
+
+await test("profile routes reject malformed handles before touching the database", async () => {
+  const server = app.listen(0);
+  await once(server, "listening");
+  try {
+    const base = `http://127.0.0.1:${server.address().port}/api/og/profiles`;
+    for (const path of ["no", "no.png", "bad-handle", "bad-handle.png", "a".repeat(40)]) {
       const response = await fetch(`${base}/${path}`);
       assert.equal(response.status, 404, path);
     }

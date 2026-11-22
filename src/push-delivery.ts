@@ -1,5 +1,6 @@
 import * as webpush from "web-push";
 import { and, eq, lte, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { db } from "./db/index.ts";
 import {
   authSessions,
@@ -12,17 +13,10 @@ import {
 } from "./db/schema.ts";
 import { env } from "./config.ts";
 import { userSelection } from "./user-data.ts";
-import { notificationPreview } from "./notification-content.ts";
+import { pushNotificationContent } from "./notification-content.ts";
 import { visiblePostAuthor } from "./post-data.ts";
 
-const descriptions = {
-  like: "liked your post",
-  repost: "reposted your post",
-  quote: "quoted your post",
-  reply: "replied to your post",
-  follow: "followed you",
-  mention: "mentioned you in a post",
-};
+const recipient = alias(users, "push_recipient");
 
 export async function flushPushDeliveries(send = webpush.sendNotification) {
   const vapidDetails = env.PUSH;
@@ -51,6 +45,7 @@ export async function flushPushDeliveries(send = webpush.sendNotification) {
           notification: notifications,
           subscription: pushSubscriptions,
           actor: userSelection,
+          hideContent: recipient.hideNotificationContent,
           content: posts.content,
           hasGif: sql<boolean>`${posts.gif} IS NOT NULL`,
           hasVoice: sql<boolean>`${posts.voice} IS NOT NULL`,
@@ -58,6 +53,7 @@ export async function flushPushDeliveries(send = webpush.sendNotification) {
         })
         .from(notifications)
         .innerJoin(users, eq(users.id, notifications.actorId))
+        .innerJoin(recipient, and(eq(recipient.id, notifications.recipientId), sql`${recipient.bannedAt} is null`))
         .leftJoin(posts, and(eq(posts.id, notifications.postId), visiblePostAuthor))
         .innerJoin(
           pushSubscriptions,
@@ -73,11 +69,7 @@ export async function flushPushDeliveries(send = webpush.sendNotification) {
           eq(authIdentities.sessionVersion, authSessions.sessionVersion),
           sql`${authIdentities.deletedAt} is null`,
         ))
-        .where(and(eq(notifications.id, job.notificationId), sql`exists (
-          select 1 from users recipient
-          where recipient.id = ${pushSubscriptions.userId}
-            and recipient.banned_at is null
-        )`));
+        .where(eq(notifications.id, job.notificationId));
       if (
         !event ||
         event.notification.readAt ||
@@ -90,28 +82,14 @@ export async function flushPushDeliveries(send = webpush.sendNotification) {
         await tx.delete(pushDeliveries).where(where);
         return true;
       }
-      const { notification, subscription, actor } = event;
-      const summary = `${actor.displayName || actor.handle} ${descriptions[notification.kind]}`;
-      const preview =
-        (notification.kind === "reply" || notification.kind === "mention") &&
-        event.content !== null
-          ? notificationPreview(event.content, event.hasGif, event.hasVoice)
-          : null;
+      const { notification, subscription } = event;
       try {
         await send(
           {
             endpoint: subscription.endpoint,
             keys: { p256dh: subscription.p256dh, auth: subscription.auth },
           },
-          JSON.stringify({
-            id: notification.id,
-            title: "ysocial",
-            body: preview ? `${summary}\n${preview}` : summary,
-            icon: actor.avatarUrl ?? "/favicon.png",
-            url: notification.postId
-              ? `/posts/${notification.postId}`
-              : `/@${actor.handle}`,
-          }),
+          JSON.stringify(pushNotificationContent(event)),
           { vapidDetails, TTL: 3600, timeout: 10_000, urgency: "normal" },
         );
       } catch (error) {

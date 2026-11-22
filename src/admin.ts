@@ -1,11 +1,12 @@
 import { Router } from "express";
-import { and, asc, count, desc, eq, gte, inArray, isNull, isNotNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, gte, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
-import { requireApprovedUser, requireOrigin } from "./auth/request.ts";
+import { requireAdminWrite, requireStaff } from "./admin-access.ts";
+import adminReports, { openReportCount } from "./admin-reports.ts";
 import { db } from "./db/index.ts";
-import { authIdentities, moderationActivity, pollVotes, posts, userRole, users } from "./db/schema.ts";
-import { publicProfileSelection, userSelection } from "./user-data.ts";
+import { authIdentities, githubConnections, moderationActivity, pollVotes, postImageFlags, postImages, posts, userRole, users } from "./db/schema.ts";
+import { githubProfileSelection, publicProfileSelection, userSelection } from "./user-data.ts";
 import { clearProfileMedia, flushMediaDeletions, queueDeletion } from "./storage/media-lifecycle.ts";
 import { affectedPostIds, publishAccountChange, publishLiveChange, publishWaitlistChange } from "./live-events.ts";
 import { serveLiveStream } from "./live.ts";
@@ -13,10 +14,9 @@ import { removePost } from "./post-removal.ts";
 import { publishUserPostVisibility, removeUser } from "./user-removal.ts";
 import { badgeDetails, badgeIcons, badgePresets } from "./profile-badges.ts";
 import { pronounsSchema } from "./pronouns.ts";
+import { imageFlagCutoff, sendPostImage } from "./post-images.ts";
+import { getAvatar } from "./storage/r2.ts";
 import { randomUUID } from "node:crypto";
-
-import { env } from "./config.ts";
-import type { Request } from "express";
 
 const router = Router();
 router.use((_req, res, next) => {
@@ -24,16 +24,21 @@ router.use((_req, res, next) => {
   next();
 });
 
-async function requireStaff(req: Request) {
-  const user = await requireApprovedUser(req);
-  if (user.role !== "admin" && user.role !== "moderator")
-    throw new AuthError(403, "staff_required");
-  return user;
-}
+router.use("/reports", adminReports);
 
 router.get("/session", async (req, res) => {
   await requireStaff(req);
   res.sendStatus(204);
+});
+
+router.get("/post-images/:id", async (req, res) => {
+  await requireStaff(req);
+  const id = z.uuid().safeParse(req.params.id);
+  if (!id.success) throw new AuthError(404, "post_image_not_found");
+  const [image] = await db.select({ data: postImages.data }).from(postImages)
+    .where(and(eq(postImages.id, id.data), isNotNull(postImages.postId)));
+  if (!image) throw new AuthError(404, "post_image_not_found");
+  sendPostImage(res, image.data);
 });
 
 const userFields = {
@@ -54,6 +59,7 @@ const postFields = {
   author: users.handle,
   content: posts.content,
   gif: posts.gif,
+  imageIds: posts.imageIds,
   voiceUrl: sql<string | null>`${posts.voice}->>'url'`,
   hasPoll: sql<boolean>`${posts.poll} is not null`,
   kind: sql<"Post" | "Reply">`case when ${posts.parentId} is null then 'Post' else 'Reply' end`,
@@ -71,7 +77,7 @@ router.get("/overview", async (req, res) => {
   if (!query.success) throw new AuthError(400, "invalid_search");
   const term = query.data.toLowerCase();
   const since = new Date(Date.now() - 86_400_000);
-  const [recentUsers, recentPosts, [userCounts], [postCounts]] = await Promise.all([
+  const [recentUsers, recentPosts, [userCounts], [postCounts], openReports] = await Promise.all([
     db.select({ ...userFields, avatarUrl: userSelection.avatarUrl }).from(users)
       .where(userSearch(term))
       .orderBy(desc(users.createdAt), desc(users.id)).limit(50),
@@ -86,6 +92,7 @@ router.get("/overview", async (req, res) => {
       total: count(),
       today: sql<number>`count(*) filter (where ${posts.createdAt} >= ${since.toISOString()})`.mapWith(Number),
     }).from(posts),
+    openReportCount(),
   ]);
   res.json({
     recentUsers: recentUsers.map(formatUser),
@@ -93,6 +100,7 @@ router.get("/overview", async (req, res) => {
     metrics: [
       { label: "Users", value: String(userCounts.total), detail: `${userCounts.today} in the last 24 hours` },
       { label: "Posts and replies", value: String(postCounts.total), detail: `${postCounts.today} in the last 24 hours` },
+      { label: "Open reports", value: String(openReports.total), detail: `${openReports.today} in the last 24 hours` },
     ],
   });
 });
@@ -104,10 +112,11 @@ router.get("/user/:id", async (req, res) => {
   const [user] = await db.select({
     ...userFields,
     ...publicProfileSelection,
+    github: githubProfileSelection,
     avatarUrl: userSelection.avatarUrl,
     colour: users.colour,
     updatedAt: users.updatedAt,
-  }).from(users).where(eq(users.id, id));
+  }).from(users).leftJoin(githubConnections, eq(githubConnections.userId, users.id)).where(eq(users.id, id));
   if (!user) throw new AuthError(404, "user_not_found");
   res.json({
     ...formatUser(user), kind: "user",
@@ -137,6 +146,58 @@ const userListQuery = z.object({
   page: z.coerce.number().int().min(1).max(1_000_000).default(1),
 });
 const pageSize = 25;
+
+router.get("/flags", async (req, res) => {
+  const viewer = await requireStaff(req);
+  const input = userListQuery.pick({ page: true }).safeParse(req.query);
+  if (!input.success) throw new AuthError(400, "invalid_flags_query");
+  const rows = await db.select({
+    id: postImageFlags.id,
+    uploaderId: postImageFlags.uploaderId,
+    handle: users.handle,
+    filename: postImageFlags.filename,
+    confidence: postImageFlags.confidence,
+    createdAt: postImageFlags.createdAt,
+  }).from(postImageFlags).innerJoin(users, eq(users.id, postImageFlags.uploaderId))
+    .where(gt(postImageFlags.createdAt, imageFlagCutoff()))
+    .orderBy(desc(postImageFlags.createdAt), desc(postImageFlags.id))
+    .limit(pageSize + 1).offset((input.data.page - 1) * pageSize);
+  res.json({ flags: rows.slice(0, pageSize), hasNextPage: rows.length > pageSize, canRemove: viewer.role === "admin" });
+});
+
+router.get("/flags/:id/image", async (req, res) => {
+  await requireStaff(req);
+  const id = z.uuid().safeParse(req.params.id);
+  if (!id.success) throw new AuthError(404, "flag_not_found");
+  const [flag] = await db.select({ data: postImageFlags.data, objectKey: postImageFlags.objectKey }).from(postImageFlags)
+    .where(and(eq(postImageFlags.id, id.data), gt(postImageFlags.createdAt, imageFlagCutoff())));
+  if (!flag) throw new AuthError(404, "flag_not_found");
+  if (flag.data) return sendPostImage(res, flag.data);
+  if (!flag.objectKey) throw new AuthError(404, "flag_not_found");
+  sendPostImage(res, Buffer.from(await getAvatar(flag.objectKey)));
+});
+
+router.delete("/flags/:id", async (req, res) => {
+  const viewer = await requireAdminWrite(req);
+  const id = z.uuid().safeParse(req.params.id);
+  if (!id.success) throw new AuthError(404, "flag_not_found");
+  const objectKey = await db.transaction(async (tx) => {
+    const [actor] = await tx.select({ role: users.role, handle: users.handle, bannedAt: users.bannedAt })
+      .from(users).where(eq(users.id, viewer.id)).for("share");
+    if (actor?.role !== "admin" || actor.bannedAt) throw new AuthError(403, "admin_required");
+    const [flag] = await tx.delete(postImageFlags).where(eq(postImageFlags.id, id.data))
+      .returning({ uploaderId: postImageFlags.uploaderId, objectKey: postImageFlags.objectKey, filename: postImageFlags.filename });
+    if (!flag) return;
+    const [uploader] = await tx.select({ handle: users.handle }).from(users).where(eq(users.id, flag.uploaderId));
+    await tx.insert(moderationActivity).values({
+      actorId: viewer.id, actorHandle: actor.handle, targetId: flag.uploaderId,
+      targetHandle: uploader?.handle ?? "", action: "removeImageFlag", detail: flag.filename ?? id.data,
+    });
+    return flag.objectKey;
+  });
+  if (objectKey) await flushMediaDeletions(objectKey);
+  res.sendStatus(204);
+});
 
 router.get("/waitlist", async (req, res) => {
   const viewer = await requireStaff(req);
@@ -209,7 +270,9 @@ router.get("/users", async (req, res) => {
     avatarUrl: userSelection.avatarUrl,
     bio: users.bio,
     pronouns: users.pronouns,
+    github: githubProfileSelection,
   }).from(users)
+    .leftJoin(githubConnections, eq(githubConnections.userId, users.id))
     .where(userSearch(q.replace(/^@/, "").toLowerCase()))
     .orderBy(desc(users.createdAt), desc(users.id))
     .limit(pageSize + 1).offset((page - 1) * pageSize);
@@ -224,14 +287,6 @@ router.get("/users", async (req, res) => {
     canEditBadges: viewer.role === "admin",
   });
 });
-
-async function requireAdminWrite(req: Request) {
-  const viewer = await requireStaff(req);
-  if (!env.ADMIN_ORIGIN) throw new AuthError(503, "admin_login_not_configured");
-  requireOrigin(req, env.ADMIN_ORIGIN);
-  if (viewer.role !== "admin") throw new AuthError(403, "admin_required");
-  return viewer;
-}
 
 const accountAction = z.discriminatedUnion("action", [
   z.strictObject({ action: z.literal("ban"), reason: z.string().trim().min(1).max(280).refine((value) => !value.includes("\u0000")) }),
@@ -340,7 +395,7 @@ router.delete("/posts/:id", async (req, res) => {
 router.delete("/posts/:id/attachments/:kind", async (req, res) => {
   const viewer = await requireAdminWrite(req);
   const id = z.uuid().safeParse(req.params.id);
-  const kind = z.enum(["gif", "voice", "all"]).safeParse(req.params.kind);
+  const kind = z.enum(["gif", "voice", "images", "all"]).safeParse(req.params.kind);
   if (!id.success || !kind.success) throw new AuthError(404, "attachment_not_found");
   const attachmentKind = kind.data;
 
@@ -352,27 +407,39 @@ router.delete("/posts/:id/attachments/:kind", async (req, res) => {
       authorId: posts.authorId,
       gif: posts.gif,
       voice: posts.voice,
+      imageIds: posts.imageIds,
       hasPoll: sql<boolean>`${posts.poll} is not null`,
       hasText: sql<boolean>`${posts.content} ~ '[^[:space:]]'`,
     }).from(posts).where(eq(posts.id, id.data)).for("update");
     if (!post) throw new AuthError(404, "post_not_found");
     const clearAll = attachmentKind === "all";
-    const hasAttachment = clearAll ? post.gif || post.voice || post.hasPoll : post[attachmentKind];
+    const removeGif = clearAll || attachmentKind === "gif";
+    const removeVoice = clearAll || attachmentKind === "voice";
+    const removeImages = clearAll || attachmentKind === "images";
+    const hasAttachment = (removeGif && post.gif) || (removeVoice && post.voice) ||
+      (removeImages && post.imageIds.length > 0) || (clearAll && post.hasPoll);
     if (!hasAttachment) return;
-    const gif = attachmentKind === "gif";
-    const keepsAttachment = !clearAll && (post.hasPoll || (gif ? post.voice : post.gif));
+    const keepsAttachment = (!clearAll && post.hasPoll) || (!removeGif && post.gif) ||
+      (!removeVoice && post.voice) || (!removeImages && post.imageIds.length > 0);
     if (!post.hasText && !keepsAttachment)
       throw new AuthError(409, "attachment_required");
 
-    const fields = clearAll ? { gif: null, voice: null, poll: null } : gif ? { gif: null } : { voice: null };
+    const fields = {
+      gif: removeGif ? null : undefined,
+      voice: removeVoice ? null : undefined,
+      imageIds: removeImages ? [] : undefined,
+      poll: clearAll ? null : undefined,
+    };
     await tx.update(posts).set(fields).where(eq(posts.id, id.data));
+    if (removeImages) await tx.delete(postImages).where(eq(postImages.postId, id.data));
     if (clearAll && post.hasPoll) await tx.delete(pollVotes).where(eq(pollVotes.postId, id.data));
-    const key = gif ? undefined : post.voice?.key;
+    const key = removeVoice ? post.voice?.key : undefined;
     if (key) await queueDeletion(tx, key);
     const [author] = await tx.select({ handle: users.handle }).from(users).where(eq(users.id, post.authorId));
     await tx.insert(moderationActivity).values({
       actorId: viewer.id, actorHandle: actor.handle, targetId: id.data,
-      targetHandle: author?.handle ?? "", action: clearAll ? "clearAttachments" : gif ? "removeGif" : "removeVoice",
+      targetHandle: author?.handle ?? "",
+      action: { all: "clearAttachments", gif: "removeGif", voice: "removeVoice", images: "removeImages" }[attachmentKind],
     });
     await publishLiveChange(tx, await affectedPostIds(tx, id.data));
     return key;
@@ -423,7 +490,8 @@ router.patch("/users/:id/profile", async (req, res) => {
     }
     const [user] = await tx.select({
       ...userFields, avatarUrl: userSelection.avatarUrl, bio: users.bio, pronouns: users.pronouns,
-    }).from(users).where(eq(users.id, target.id));
+      github: githubProfileSelection,
+    }).from(users).leftJoin(githubConnections, eq(githubConnections.userId, users.id)).where(eq(users.id, target.id));
     await tx.insert(moderationActivity).values({
       actorId: actor.id, actorHandle: actor.handle, targetId: target.id, targetHandle: target.handle,
       action: change.action, detail: change.action === "changeUsername" ? `@${target.handle} → @${user.handle}` : null,

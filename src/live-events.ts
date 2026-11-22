@@ -89,7 +89,11 @@ export async function affectedPostIds(tx: Transaction, id: string) {
   return rows.map((row) => row.id);
 }
 
-export function startLiveEvents() {
+export function startLiveEvents(dm?: {
+  receive(payload: string): void;
+  disconnect(userId: string): void;
+  setListening(ready: boolean): void;
+}) {
   let stopped = false;
   let connectedBefore = false;
   let client: pg.Client | undefined;
@@ -118,6 +122,7 @@ export function startLiveEvents() {
     const lose = () => {
       if (lost) return;
       lost = true;
+      if (client === next) dm?.setListening(false);
       if (client === next) client = undefined;
       next.end().catch(() => {});
       retry();
@@ -131,7 +136,12 @@ export function startLiveEvents() {
         }
         return;
       }
+      if (message.channel === "live_dm") {
+        if (message.payload) dm?.receive(message.payload);
+        return;
+      }
       if (message.channel === "live_account") {
+        if (message.payload) dm?.disconnect(message.payload);
         broadcast("event: account\ndata: {}\n\n", (audience) =>
           typeof audience === "object" && (("feedFor" in audience ? audience.feedFor : audience.approvalFor) === message.payload));
         return;
@@ -148,6 +158,8 @@ export function startLiveEvents() {
         await next.query(`listen ${channel}`);
       await next.query("listen live_waitlist");
       await next.query("listen live_account");
+      if (dm) await next.query("listen live_dm");
+      if (!stopped && !lost) dm?.setListening(true);
       delay = 500;
       broadcast("event: resync\ndata: {}\n\n", (audience) => connectedBefore || !isFeedAudience(audience));
       connectedBefore = true;
@@ -160,6 +172,7 @@ export function startLiveEvents() {
   void connect();
   return () => {
     stopped = true;
+    dm?.setListening(false);
     clearInterval(heartbeat);
     clearTimeout(retryTimer);
     closeLiveStreams();

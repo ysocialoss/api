@@ -292,15 +292,120 @@
     {
       "idx": 41,
       "version": "7",
-      "when": 1795368349898,
-      "tag": "0041_paints",
+      "when": 1795182599270,
+      "tag": "0041_github_connections",
       "breakpoints": true
     },
     {
       "idx": 42,
       "version": "7",
-      "when": 1795368362898,
-      "tag": "0042_seed_paints",
+      "when": 1795190755594,
+      "tag": "0042_github_contribution_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1795191000000,
+      "tag": "0043_encrypted_dms",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1795191100000,
+      "tag": "0044_dm_invite_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1795191200000,
+      "tag": "0045_hide_notification_content",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1795191300000,
+      "tag": "0046_dm_identity_recovery",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1795193641318,
+      "tag": "0047_dm_requests_reactions",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1795195989555,
+      "tag": "0048_dm_polls_attachments",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1795197135085,
+      "tag": "0049_dm_opt_out",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1795280688495,
+      "tag": "0050_post_images",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1795281557102,
+      "tag": "0051_post_image_flags",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1795281825174,
+      "tag": "0052_post_image_flag_storage",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1795304035288,
+      "tag": "0053_reports",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1795306932913,
+      "tag": "0054_user_blocks",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1795363373684,
+      "tag": "0055_connections",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1795372316151,
+      "tag": "0056_paints",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1795372316501,
+      "tag": "0057_seed_paints",
       "breakpoints": true
     }
   ]

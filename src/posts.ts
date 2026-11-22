@@ -10,6 +10,7 @@ import {
   visiblePostAuthor,
 } from "./post-data.ts";
 import { homeFeed } from "./feed-entries.ts";
+import { notBlockedSql, requireNotBlocked } from "./blocks.ts";
 import { Router, type Request } from "express";
 import { alias } from "drizzle-orm/pg-core";
 import {
@@ -36,6 +37,7 @@ import {
   postReposts,
   postTopics,
   posts,
+  postImages,
   mediaDeletions,
   users,
 } from "./db/schema.ts";
@@ -48,9 +50,11 @@ import { postFilterConditions, postMatchesSql, readPostFilters, readSearchQuery 
 import { extractTopics } from "./topics-text.ts";
 import { affectedPostIds, publishLiveChange, publishLivePost } from "./live-events.ts";
 import { removePost } from "./post-removal.ts";
+import { maxPostImages } from "./post-images.ts";
 
 import { syncMentions } from "./mentions.ts";
 import { attachSelfReplies } from "./self-replies.ts";
+import { easterEggGif, easterEggToken } from "./easter-egg.ts";
 import { readGifSelection } from "./storage/klipy.ts";
 import { pollDefinitionSchema } from "./poll-schema.ts";
 import { flushMediaDeletions } from "./storage/media-lifecycle.ts";
@@ -80,15 +84,18 @@ const createSchema = contentSchema
   .extend({
     content: contentSchema.shape.content.default(""),
     clientId: z.uuid().optional(),
-    // Preserve compatibility with callers that send an empty attachment list.
-    attachmentIds: z.array(z.uuid()).max(0).optional(),
+    attachmentIds: z.array(z.uuid().transform((id) => id.toLowerCase()))
+      .max(maxPostImages)
+      .refine((ids) => new Set(ids).size === ids.length)
+      .default([]),
     gifToken: z.string().min(1).max(4096).optional(),
     voiceToken: z.string().min(1).max(4096).optional(),
     poll: pollDefinitionSchema.optional(),
     // Makes this a quote post: a new top-level post that embeds the quoted one.
     quotedPostId: z.uuid().optional(),
   })
-  .refine(({ content, gifToken, poll, voiceToken }) => Boolean(content || gifToken || poll || voiceToken));
+  .refine(({ content, gifToken, poll, voiceToken, attachmentIds }) =>
+    Boolean(content || gifToken || poll || voiceToken || attachmentIds.length));
 const cursorSchema = z.strictObject({
   createdAt: z.iso.datetime(),
   id: z.uuid(),
@@ -113,7 +120,11 @@ async function createPost({
   parentId?: string | null;
   quotedPostId?: string | null;
 }) {
-  const selection = input.gifToken ? readGifSelection(input.gifToken, userId) : null;
+  const selection = !input.gifToken
+    ? null
+    : input.gifToken === easterEggToken
+      ? { gif: easterEggGif, expires: Infinity }
+      : readGifSelection(input.gifToken, userId);
   const gif = selection?.gif ?? null;
   const voiceSelection = input.voiceToken ? readVoiceSelection(input.voiceToken, userId) : null;
   const voice = voiceSelection?.voice ?? null;
@@ -129,6 +140,7 @@ async function createPost({
         .where(and(eq(posts.id, parentId), visiblePostAuthor))
         .for("key share");
       if (!parent) throw new AuthError(404, "post_not_found");
+      await requireNotBlocked(tx, userId, parent.authorId);
       parentAuthor = parent.authorId;
     }
     let quotedAuthor: string | undefined;
@@ -140,6 +152,7 @@ async function createPost({
         .from(posts)
         .where(and(eq(posts.id, quotedPostId), visiblePostAuthor))
         .for("key share");
+      if (quoted) await requireNotBlocked(tx, userId, quoted.authorId);
       if (quoted) quotedAuthor = quoted.authorId;
       else quotedGone = true;
     }
@@ -156,6 +169,7 @@ async function createPost({
             content: input.content,
             gif,
             voice,
+            imageIds: input.attachmentIds,
             poll: input.poll,
             parentId,
             quotedPostId,
@@ -164,6 +178,20 @@ async function createPost({
           .onConflictDoNothing({ target: posts.id })
           .returning({ id: posts.id });
     if (saved) {
+      if (input.attachmentIds.length) {
+        const claimable = and(
+          inArray(postImages.id, input.attachmentIds),
+          eq(postImages.uploaderId, userId),
+          isNull(postImages.postId),
+          gt(postImages.expiresAt, new Date()),
+        );
+        const images = await tx.select({ id: postImages.id }).from(postImages)
+          .where(claimable).orderBy(postImages.id).for("update");
+        if (images.length !== input.attachmentIds.length)
+          throw new AuthError(400, "invalid_post_image_selection");
+        await tx.update(postImages).set({ postId: saved.id })
+          .where(inArray(postImages.id, images.map(({ id }) => id)));
+      }
       if (voice) await tx.delete(mediaDeletions).where(eq(mediaDeletions.key, voice.key));
       await syncMentions(tx, saved.id, userId, input.content);
       await syncPostTopics(tx, saved.id, input.content);
@@ -215,6 +243,7 @@ async function createPost({
         content: posts.content,
         gif: posts.gif,
         voice: posts.voice,
+        imageIds: posts.imageIds,
         poll: posts.poll,
       })
       .from(posts)
@@ -231,6 +260,7 @@ async function createPost({
       existing.content !== input.content ||
       existing.gif?.url !== gif?.url ||
       existing.voice?.key !== voice?.key ||
+      !isDeepStrictEqual(existing.imageIds, input.attachmentIds) ||
       savedPoll?.title !== input.poll?.title ||
       savedPoll?.anonymous !== input.poll?.anonymous ||
       !isDeepStrictEqual(savedPoll?.options, input.poll?.options)
@@ -330,6 +360,7 @@ const listPosts: import("express").RequestHandler = async (req, res) => {
     .where(
       and(
         isNull(users.bannedAt),
+        notBlockedSql(viewerId, posts.authorId),
         parentId ? eq(posts.parentId, parentId) : undefined,
         textSearch ? postMatchesSql(textSearch) : undefined,
         ...(filters && searching ? postFilterConditions(filters) : []),
@@ -514,11 +545,13 @@ router.get("/:id/thread", async (req, res) => {
     `),
     db.execute<{ id: string }>(sql`
       with recursive tree as (
-        select id, 1 as depth from posts where parent_id = ${id}
+        select p0.id, 1 as depth from posts p0 where p0.parent_id = ${id}
+          ${viewerId ? sql`and ${notBlockedSql(viewerId, sql`p0.author_id`)}` : sql``}
         union all
         select p.id, t.depth + 1
         from posts p join tree t on p.parent_id = t.id
         where t.depth < ${THREAD_MAX_DEPTH}
+          ${viewerId ? sql`and ${notBlockedSql(viewerId, sql`p.author_id`)}` : sql``}
       )
       select t.id from tree t join posts p on p.id = t.id
       join users u on u.id = p.author_id and u.banned_at is null
@@ -721,6 +754,7 @@ async function setLike(req: Request, liked: boolean) {
       .where(and(eq(posts.id, id), visiblePostAuthor))
       .for("update");
     if (!post) throw new AuthError(404, "post_not_found");
+    if (liked) await requireNotBlocked(tx, user.id, post.authorId);
     if (liked) {
       const [inserted] = await tx
         .insert(postLikes)
@@ -772,6 +806,7 @@ async function setRepost(req: Request, reposted: boolean) {
       .where(and(eq(posts.id, id), visiblePostAuthor))
       .for("update");
     if (!post) throw new AuthError(404, "post_not_found");
+    if (reposted) await requireNotBlocked(tx, user.id, post.authorId);
     if (reposted) {
       // Reposting again with another audience switches the existing repost.
       await tx
@@ -847,6 +882,7 @@ router.patch("/:id", async (req, res) => {
         content: posts.content,
         gif: posts.gif,
         voice: posts.voice,
+        imageIds: posts.imageIds,
         poll: posts.poll,
         createdAt: posts.createdAt,
         editedAt: posts.editedAt,
@@ -857,7 +893,7 @@ router.patch("/:id", async (req, res) => {
     if (!existing) throw new AuthError(404, "post_not_found");
     if (existing.authorId !== user.id)
       throw new AuthError(403, "not_post_author");
-    if (!parsed.data.content && !existing.gif && !existing.poll && !existing.voice)
+    if (!parsed.data.content && !existing.gif && !existing.poll && !existing.voice && !existing.imageIds.length)
       throw new AuthError(400, "invalid_content");
     const [saved] = await tx
       .update(posts)

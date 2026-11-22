@@ -6,9 +6,11 @@ import type { Voice } from "../storage/voice-selection.ts";
 import { sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
+  bigint,
   check,
   customType,
   boolean,
+  doublePrecision,
   pgEnum,
   integer,
   jsonb,
@@ -66,9 +68,10 @@ export const users = pgTable(
     displayName: text("display_name").notNull().default(""),
     bio: text().notNull().default(""),
     pronouns: text().notNull().default(""),
-    notificationPromptDismissed: boolean("notification_prompt_dismissed")
-      .notNull()
-      .default(false),
+    notificationPromptDismissed: boolean("notification_prompt_dismissed").notNull().default(false),
+    dmGeneration: integer("dm_generation").notNull().default(1),
+    dmOptedOut: boolean("dm_opted_out").notNull().default(false),
+    hideNotificationContent: boolean("hide_notification_content").notNull().default(false),
     avatarKey: text("avatar_key"),
     identityAvatarHidden: boolean("identity_avatar_hidden")
       .notNull()
@@ -112,6 +115,91 @@ export const userHandles = pgTable(
   (table) => [index("user_handles_user_idx").on(table.userId)],
 );
 
+export const dmDevices = pgTable("dm_devices", {
+  id: uuid().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  label: text().notNull(),
+  encryptionKey: text("encryption_key").notNull(),
+  signingKey: text("signing_key").notNull(),
+  proof: text().notNull(),
+  generation: integer().notNull().default(1),
+  root: boolean().notNull().default(false),
+  approvedBy: uuid("approved_by"),
+  approval: text(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  revokedBy: uuid("revoked_by"),
+  revocation: text(),
+}, (table) => [
+  index("dm_devices_user_idx").on(table.userId),
+  uniqueIndex("dm_devices_root_idx").on(table.userId, table.generation).where(sql`${table.root}`),
+  check("dm_devices_approval_check", sql`(${table.approvedBy} is null) = (${table.approval} is null) and (not ${table.root} or ${table.approvedBy} is null)`),
+  check("dm_devices_revocation_check", sql`(${table.revokedAt} is null) = (${table.revokedBy} is null) and (${table.revokedAt} is null) = (${table.revocation} is null)`),
+]);
+
+export const dmInviteStatus = pgEnum("dm_invite_status", ["pending", "accepted", "declined"]);
+
+export const dmConversations = pgTable("dm_conversations", {
+  id: uuid().defaultRandom().primaryKey(),
+  firstUserId: uuid("first_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  secondUserId: uuid("second_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  invitedBy: uuid("invited_by"),
+  inviteStatus: dmInviteStatus("invite_status").notNull().default("accepted"),
+  lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
+  firstHiddenAt: timestamp("first_hidden_at", { withTimezone: true }),
+  secondHiddenAt: timestamp("second_hidden_at", { withTimezone: true }),
+}, (table) => [
+  unique("dm_conversations_pair_unique").on(table.firstUserId, table.secondUserId),
+  index("dm_conversations_second_user_idx").on(table.secondUserId),
+  check("dm_conversations_pair_order", sql`${table.firstUserId} < ${table.secondUserId}`),
+  check("dm_conversations_inviter_check", sql`
+    (${table.invitedBy} is null and ${table.inviteStatus} = 'accepted') or
+    (${table.invitedBy} is not null and ${table.invitedBy} in (${table.firstUserId}, ${table.secondUserId}))
+  `),
+]);
+
+export const dmMessages = pgTable("dm_messages", {
+  id: uuid().primaryKey(),
+  conversationId: uuid("conversation_id").notNull().references(() => dmConversations.id, { onDelete: "cascade" }),
+  senderId: uuid("sender_id").notNull(),
+  senderDeviceId: uuid("sender_device_id").notNull(),
+  version: integer().notNull(),
+  iv: text().notNull(),
+  ciphertext: text().notNull(),
+  signature: text().notNull(),
+  envelopes: jsonb().$type<Record<string, string>>().notNull(),
+  sequence: bigint({ mode: "bigint" }).generatedAlwaysAsIdentity().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  editedAt: timestamp("edited_at", { withTimezone: true }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+}, (table) => [unique("dm_messages_conversation_sequence_unique").on(table.conversationId, table.sequence)]);
+
+export const dmReactions = pgTable("dm_reactions", {
+  messageId: uuid("message_id").notNull().references(() => dmMessages.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  emoji: text().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [primaryKey({ columns: [table.messageId, table.userId] })]);
+
+export const dmPollVotes = pgTable("dm_poll_votes", {
+  messageId: uuid("message_id").notNull().references(() => dmMessages.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  option: integer().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [primaryKey({ columns: [table.messageId, table.userId] }), check("dm_poll_votes_option_check", sql`${table.option} between 0 and 9`)]);
+
+const dmBlob = customType<{ data: Buffer }>({ dataType: () => "bytea" });
+
+export const dmAttachments = pgTable("dm_attachments", {
+  id: uuid().primaryKey(),
+  conversationId: uuid("conversation_id").notNull().references(() => dmConversations.id, { onDelete: "cascade" }),
+  uploaderId: uuid("uploader_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  messageId: uuid("message_id").references(() => dmMessages.id, { onDelete: "cascade" }),
+  data: dmBlob().notNull(),
+  size: integer().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [index("dm_attachments_message_idx").on(table.messageId)]);
+
 export const oauthTransactions = pgTable("oauth_transactions", {
   state: text().primaryKey(),
   browserHash: text("browser_hash").notNull(),
@@ -120,6 +208,64 @@ export const oauthTransactions = pgTable("oauth_transactions", {
   nonce: text().notNull(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 });
+
+export const githubLinkAttempts = pgTable("github_link_attempts", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  stateHash: text("state_hash").notNull(),
+  sessionHash: text("session_hash").notNull(),
+  verifier: text().notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});
+
+export const connectionProviders = ["discord", "twitch"] as const;
+
+export const connectionLinkAttempts = pgTable("connection_link_attempts", {
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  provider: text().notNull(),
+  stateHash: text("state_hash").notNull(),
+  sessionHash: text("session_hash").notNull(),
+  verifier: text().notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.userId, table.provider] }),
+]);
+
+export const connections = pgTable("connections", {
+  id: uuid().defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  provider: text().notNull(),
+  externalId: text("external_id").notNull(),
+  username: text().notNull(),
+  displayName: text("display_name").notNull(),
+  profileUrl: text("profile_url").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  unique("connections_user_provider_unique").on(table.userId, table.provider),
+  unique("connections_provider_external_unique").on(table.provider, table.externalId),
+  check("connections_provider_check", sql`${table.provider} in ('discord', 'twitch')`),
+]);
+
+export const githubConnections = pgTable("github_connections", {
+  id: uuid().defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().unique().references(() => users.id, { onDelete: "cascade" }),
+  githubId: text("github_id").notNull().unique(),
+  login: text().notNull(),
+  contributionCount: integer("contribution_count"),
+  checkedAt: timestamp("checked_at", { withTimezone: true }),
+  attemptedAt: timestamp("attempted_at", { withTimezone: true }),
+}, (table) => [
+  check("github_contribution_count_check", sql`${table.contributionCount} >= 0`),
+  index("github_connections_attempted_idx").on(table.attemptedAt),
+]);
+
+export const githubContributionJobs = pgTable("github_contribution_jobs", {
+  connectionId: uuid("connection_id").primaryKey()
+    .references(() => githubConnections.id, { onDelete: "cascade" }),
+  runAt: timestamp("run_at", { withTimezone: true }).notNull().defaultNow(),
+  lease: uuid(),
+}, (table) => [
+  index("github_contribution_jobs_due_idx").on(table.runAt, table.connectionId),
+]);
 
 export const authIdentities = pgTable(
   "auth_identities",
@@ -179,6 +325,7 @@ export const posts = pgTable(
     content: text().notNull(),
     gif: jsonb().$type<KlipyGif>(),
     voice: jsonb().$type<Voice>(),
+    imageIds: uuid("image_ids").array().notNull().default(sql`'{}'::uuid[]`),
     poll: jsonb().$type<PollDefinition>(),
     createdAt: timestamp("created_at", { withTimezone: true, precision: 3 })
       .notNull()
@@ -206,10 +353,36 @@ export const posts = pgTable(
     ),
     check(
       "posts_content_check",
-      sql`char_length(${table.content}) <= 2000 AND (${table.content} ~ '[^[:space:]]' OR (${table.content} = '' AND (${table.gif} IS NOT NULL OR ${table.poll} IS NOT NULL OR ${table.voice} IS NOT NULL)))`,
+      sql`char_length(${table.content}) <= 2000 AND (${table.content} ~ '[^[:space:]]' OR (${table.content} = '' AND (${table.gif} IS NOT NULL OR ${table.poll} IS NOT NULL OR ${table.voice} IS NOT NULL OR cardinality(${table.imageIds}) > 0)))`,
     ),
   ],
 );
+
+export const postImages = pgTable("post_images", {
+  id: uuid().defaultRandom().primaryKey(),
+  uploaderId: uuid("uploader_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  postId: uuid("post_id").references(() => posts.id, { onDelete: "cascade" }),
+  data: dmBlob().notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (table) => [
+  index("post_images_post_idx").on(table.postId),
+  index("post_images_draft_uploader_idx").on(table.uploaderId).where(sql`${table.postId} IS NULL`),
+  index("post_images_draft_expiry_idx").on(table.expiresAt).where(sql`${table.postId} IS NULL`),
+]);
+
+export const postImageFlags = pgTable("post_image_flags", {
+  id: uuid().defaultRandom().primaryKey(),
+  uploaderId: uuid("uploader_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  filename: text(),
+  confidence: doublePrecision(),
+  data: dmBlob(),
+  objectKey: text("object_key").unique(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("post_image_flags_created_idx").on(table.createdAt.desc(), table.id.desc()),
+  index("post_image_flags_uploader_idx").on(table.uploaderId),
+  check("post_image_flags_one_image", sql`num_nonnulls(${table.data}, ${table.objectKey}) = 1`),
+]);
 
 export const pollVotes = pgTable(
   "poll_votes",
@@ -427,6 +600,8 @@ export const notificationKind = pgEnum("notification_kind", [
   "follow",
   "mention",
   "quote",
+  "dm_invite",
+  "dm_message",
 ]);
 export const notifications = pgTable(
   "notifications",
@@ -440,6 +615,7 @@ export const notifications = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     kind: notificationKind().notNull(),
     postId: uuid("post_id").references(() => posts.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id").references(() => dmConversations.id, { onDelete: "cascade" }),
     // Stable event identity also deduplicates an unlike/re-like or unfollow/re-follow.
     subject: text().notNull(),
     readAt: timestamp("read_at", { withTimezone: true }),
@@ -462,16 +638,101 @@ export const notifications = pgTable(
     index("notifications_unread_idx")
       .on(table.recipientId)
       .where(sql`${table.readAt} is null`),
+    index("notifications_conversation_idx").on(table.conversationId).where(sql`${table.conversationId} is not null`),
     check(
       "notifications_not_self",
       sql`${table.recipientId} <> ${table.actorId}`,
     ),
     check(
       "notifications_subject_check",
-      sql`(${table.kind} = 'follow' AND ${table.postId} IS NULL) OR (${table.kind} <> 'follow' AND ${table.postId} IS NOT NULL)`,
+      sql`case
+        when ${table.kind}::text in ('dm_invite', 'dm_message') then ${table.conversationId} is not null and ${table.postId} is null
+        when ${table.kind} = 'follow' then ${table.conversationId} is null and ${table.postId} is null
+        else ${table.conversationId} is null and ${table.postId} is not null
+      end`,
     ),
   ],
 );
+
+export const userBlocks = pgTable(
+  "user_blocks",
+  {
+    blockerId: uuid("blocker_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    blockedId: uuid("blocked_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.blockerId, table.blockedId] }),
+    index("user_blocks_blocked_idx").on(table.blockedId, table.blockerId),
+    check("user_blocks_not_self", sql`${table.blockerId} <> ${table.blockedId}`),
+  ],
+);
+
+export const reportTargetType = pgEnum("report_target_type", ["post", "user", "message"]);
+export const reportStatus = pgEnum("report_status", ["open", "resolved", "dismissed"]);
+
+export type ReportSnapshot =
+  | {
+      type: "post";
+      kind: "Post" | "Reply" | "Quote";
+      authorHandle: string;
+      authorName: string;
+      content: string;
+      parentId: string | null;
+      quotedPostId: string | null;
+      gifUrl: string | null;
+      imageIds: string[];
+      hasVoice: boolean;
+      pollTitle: string | null;
+      createdAt: string;
+    }
+  | {
+      type: "user";
+      handle: string;
+      displayName: string;
+      bio: string;
+      pronouns: string;
+      avatarUrl: string | null;
+      bannerUrl: string | null;
+    }
+  | {
+      type: "message";
+      peerHandle: string;
+      messages: { id: string; senderId: string; senderHandle: string; text: string; createdAt: string; reported: boolean }[];
+    };
+
+export const reports = pgTable("reports", {
+  id: uuid().defaultRandom().primaryKey(),
+  reporterId: uuid("reporter_id").references(() => users.id, { onDelete: "set null" }),
+  reporterHandle: text("reporter_handle").notNull(),
+  targetType: reportTargetType("target_type").notNull(),
+  targetKey: uuid("target_key").notNull(),
+  targetUserId: uuid("target_user_id").references(() => users.id, { onDelete: "set null" }),
+  targetHandle: text("target_handle").notNull(),
+  conversationId: uuid("conversation_id"),
+  reason: text().notNull(),
+  details: text().notNull().default(""),
+  snapshot: jsonb().$type<ReportSnapshot>().notNull(),
+  status: reportStatus().notNull().default("open"),
+  resolution: text(),
+  note: text(),
+  resolvedById: uuid("resolved_by_id"),
+  resolvedByHandle: text("resolved_by_handle"),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true, precision: 3 }),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  index("reports_queue_idx").on(table.status, table.createdAt.desc(), table.id.desc()),
+  index("reports_target_idx").on(table.targetType, table.targetKey, table.status),
+  index("reports_target_user_idx").on(table.targetUserId),
+  index("reports_reporter_idx").on(table.reporterId, table.createdAt.desc()),
+  uniqueIndex("reports_open_unique").on(table.reporterId, table.targetType, table.targetKey)
+    .where(sql`${table.status} = 'open'`),
+  check("reports_reason_check", sql`${table.reason} in ('spam', 'harassment', 'hate', 'violence', 'sexual', 'self_harm', 'misinformation', 'impersonation', 'illegal', 'other')`),
+  check("reports_details_check", sql`char_length(${table.details}) <= 1000`),
+  check("reports_note_check", sql`char_length(${table.note}) <= 1000`),
+  check("reports_conversation_check", sql`(${table.targetType} = 'message') = (${table.conversationId} is not null)`),
+  check("reports_resolution_check", sql`(${table.status} = 'open') = (${table.resolvedAt} is null)`),
+]);
 
 export const pushSubscriptions = pgTable(
   "push_subscriptions",

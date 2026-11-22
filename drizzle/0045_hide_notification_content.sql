@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "hide_notification_content" boolean DEFAULT false NOT NULL;
