@@ -10,6 +10,7 @@ import {
   visiblePostAuthor,
 } from "./post-data.ts";
 import { homeFeed } from "./feed-entries.ts";
+import { notBlockedSql, requireNotBlocked } from "./blocks.ts";
 import { Router, type Request } from "express";
 import { alias } from "drizzle-orm/pg-core";
 import {
@@ -139,6 +140,7 @@ async function createPost({
         .where(and(eq(posts.id, parentId), visiblePostAuthor))
         .for("key share");
       if (!parent) throw new AuthError(404, "post_not_found");
+      await requireNotBlocked(tx, userId, parent.authorId);
       parentAuthor = parent.authorId;
     }
     let quotedAuthor: string | undefined;
@@ -150,6 +152,7 @@ async function createPost({
         .from(posts)
         .where(and(eq(posts.id, quotedPostId), visiblePostAuthor))
         .for("key share");
+      if (quoted) await requireNotBlocked(tx, userId, quoted.authorId);
       if (quoted) quotedAuthor = quoted.authorId;
       else quotedGone = true;
     }
@@ -357,6 +360,7 @@ const listPosts: import("express").RequestHandler = async (req, res) => {
     .where(
       and(
         isNull(users.bannedAt),
+        notBlockedSql(viewerId, posts.authorId),
         parentId ? eq(posts.parentId, parentId) : undefined,
         textSearch ? postMatchesSql(textSearch) : undefined,
         ...(filters && searching ? postFilterConditions(filters) : []),
@@ -541,11 +545,13 @@ router.get("/:id/thread", async (req, res) => {
     `),
     db.execute<{ id: string }>(sql`
       with recursive tree as (
-        select id, 1 as depth from posts where parent_id = ${id}
+        select p0.id, 1 as depth from posts p0 where p0.parent_id = ${id}
+          ${viewerId ? sql`and ${notBlockedSql(viewerId, sql`p0.author_id`)}` : sql``}
         union all
         select p.id, t.depth + 1
         from posts p join tree t on p.parent_id = t.id
         where t.depth < ${THREAD_MAX_DEPTH}
+          ${viewerId ? sql`and ${notBlockedSql(viewerId, sql`p.author_id`)}` : sql``}
       )
       select t.id from tree t join posts p on p.id = t.id
       join users u on u.id = p.author_id and u.banned_at is null
@@ -748,6 +754,7 @@ async function setLike(req: Request, liked: boolean) {
       .where(and(eq(posts.id, id), visiblePostAuthor))
       .for("update");
     if (!post) throw new AuthError(404, "post_not_found");
+    if (liked) await requireNotBlocked(tx, user.id, post.authorId);
     if (liked) {
       const [inserted] = await tx
         .insert(postLikes)
@@ -799,6 +806,7 @@ async function setRepost(req: Request, reposted: boolean) {
       .where(and(eq(posts.id, id), visiblePostAuthor))
       .for("update");
     if (!post) throw new AuthError(404, "post_not_found");
+    if (reposted) await requireNotBlocked(tx, user.id, post.authorId);
     if (reposted) {
       // Reposting again with another audience switches the existing repost.
       await tx

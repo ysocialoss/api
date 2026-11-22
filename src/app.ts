@@ -23,6 +23,8 @@ import { AuthError } from "./auth/provider.ts";
 import express, { type ErrorRequestHandler } from "express";
 import pg from "pg";
 import admin from "./admin.ts";
+import reports from "./reports.ts";
+import blocks from "./blocks.ts";
 import auth from "./auth.ts";
 import { pool } from "./db/index.ts";
 import { connectWithRetry } from "./db/connect.ts";
@@ -49,9 +51,11 @@ app.use((req, res, next) => {
 app.post("/webhooks/cns", (_req, res) => {
   res.status(503).json({ error: "webhooks_not_configured" });
 });
+app.use("/api/reports", express.json({ limit: "64kb" }), reports);
 app.use(express.json({ limit: "16kb" }));
 app.use("/auth", auth);
 app.use("/api/admin", admin);
+app.use("/api/blocks", blocks);
 app.use("/api/posts", posts);
 app.use("/api/post-images", postImages);
 app.use("/api/og", og);

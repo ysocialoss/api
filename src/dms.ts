@@ -15,6 +15,8 @@ import { recordNotification } from "./notification-events.ts";
 import { attachmentLimit, requestLimit, validReaction } from "./dm-protocol.ts";
 import { previewIconForPost, previewImageForPost, previewsForPost } from "./link-previews.ts";
 import { publishDmChange, publishDmDeviceChange } from "./dm-events.ts";
+import { eraseDmMessage } from "./dm-removal.ts";
+import { blockState } from "./blocks.ts";
 
 const router = Router();
 const previewAuthor = alias(users, "chat_preview_author");
@@ -272,6 +274,8 @@ router.post("/conversations", async (req, res) => {
   await requireDeviceAccess(req, viewer.id, deviceId, handle);
   const peer = await db.query.users.findFirst({ where: eq(users.handle, handle) });
   if (!peer || !peer.approvedAt || peer.bannedAt) throw new AuthError(404, "dm_user_not_found");
+  const blocks = await blockState(db, viewer.id, peer.id);
+  if (blocks.blocking || blocks.blockedBy) throw new AuthError(403, "dm_blocked");
   if (peer.id === viewer.id) throw new AuthError(400, "dm_self");
   const firstUserId = viewer.id < peer.id ? viewer.id : peer.id;
   const secondUserId = viewer.id < peer.id ? peer.id : viewer.id;
@@ -519,6 +523,8 @@ router.post("/conversations/:id/messages", async (req, res) => {
     requireAvailableAccounts(await lockAccounts(tx, ids), viewer.id);
     const current = await tx.query.dmConversations.findFirst({ where: eq(dmConversations.id, id) });
     if (current?.inviteStatus === "declined") throw new AuthError(403, "dm_blocked");
+    const blocks = await blockState(tx, viewer.id, peerOf(conversation, viewer.id));
+    if (blocks.blocking || blocks.blockedBy) throw new AuthError(403, "dm_blocked");
     if (current?.inviteStatus === "pending") {
       if (current.invitedBy !== viewer.id) throw new AuthError(409, "dm_invite_required");
       const [sent] = await tx.select({ value: sql<number>`count(*)::int` }).from(dmMessages)
@@ -597,21 +603,10 @@ router.delete("/conversations/:id/messages/:messageId", async (req, res) => {
   const ids = participants(conversation);
   await db.transaction(async (tx) => {
     await lockAccounts(tx, ids);
-    const [deleted] = await tx.update(dmMessages)
-      .set({ deletedAt: new Date(), iv: "", ciphertext: "", signature: "", envelopes: {} })
-      .where(and(eq(dmMessages.id, messageId), eq(dmMessages.conversationId, id), eq(dmMessages.senderId, viewer.id), isNull(dmMessages.deletedAt)))
-      .returning({ id: dmMessages.id });
-    if (!deleted) {
-      const existing = await tx.query.dmMessages.findFirst({ where: and(eq(dmMessages.id, messageId), eq(dmMessages.conversationId, id)) });
-      if (!existing) throw new AuthError(404, "dm_message_not_found");
-      if (existing.senderId !== viewer.id) throw new AuthError(403, "dm_message_owner_required");
-      return;
-    }
-    await tx.delete(dmReactions).where(eq(dmReactions.messageId, messageId));
-    await tx.delete(dmPollVotes).where(eq(dmPollVotes.messageId, messageId));
-    await tx.delete(dmAttachments).where(eq(dmAttachments.messageId, messageId));
-    await tx.delete(notifications).where(and(eq(notifications.conversationId, id), eq(notifications.kind, "dm_message"), eq(notifications.subject, messageId)));
-    for (const userId of ids) await publishDmChange(tx, userId, { type: "conversation", id, roster: false, message: messageId });
+    if (await eraseDmMessage(tx, id, messageId, ids, viewer.id)) return;
+    const existing = await tx.query.dmMessages.findFirst({ where: and(eq(dmMessages.id, messageId), eq(dmMessages.conversationId, id)) });
+    if (!existing) throw new AuthError(404, "dm_message_not_found");
+    if (existing.senderId !== viewer.id) throw new AuthError(403, "dm_message_owner_required");
   });
   res.sendStatus(204);
 });

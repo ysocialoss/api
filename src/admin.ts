@@ -2,7 +2,8 @@ import { Router } from "express";
 import { and, asc, count, desc, eq, gt, gte, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
-import { requireApprovedUser, requireOrigin } from "./auth/request.ts";
+import { requireAdminWrite, requireStaff } from "./admin-access.ts";
+import adminReports, { openReportCount } from "./admin-reports.ts";
 import { db } from "./db/index.ts";
 import { authIdentities, githubConnections, moderationActivity, pollVotes, postImageFlags, postImages, posts, userRole, users } from "./db/schema.ts";
 import { githubProfileSelection, publicProfileSelection, userSelection } from "./user-data.ts";
@@ -17,21 +18,13 @@ import { imageFlagCutoff, sendPostImage } from "./post-images.ts";
 import { getAvatar } from "./storage/r2.ts";
 import { randomUUID } from "node:crypto";
 
-import { env } from "./config.ts";
-import type { Request } from "express";
-
 const router = Router();
 router.use((_req, res, next) => {
   res.set("Cache-Control", "no-store");
   next();
 });
 
-async function requireStaff(req: Request) {
-  const user = await requireApprovedUser(req);
-  if (user.role !== "admin" && user.role !== "moderator")
-    throw new AuthError(403, "staff_required");
-  return user;
-}
+router.use("/reports", adminReports);
 
 router.get("/session", async (req, res) => {
   await requireStaff(req);
@@ -84,7 +77,7 @@ router.get("/overview", async (req, res) => {
   if (!query.success) throw new AuthError(400, "invalid_search");
   const term = query.data.toLowerCase();
   const since = new Date(Date.now() - 86_400_000);
-  const [recentUsers, recentPosts, [userCounts], [postCounts]] = await Promise.all([
+  const [recentUsers, recentPosts, [userCounts], [postCounts], openReports] = await Promise.all([
     db.select({ ...userFields, avatarUrl: userSelection.avatarUrl }).from(users)
       .where(userSearch(term))
       .orderBy(desc(users.createdAt), desc(users.id)).limit(50),
@@ -99,6 +92,7 @@ router.get("/overview", async (req, res) => {
       total: count(),
       today: sql<number>`count(*) filter (where ${posts.createdAt} >= ${since.toISOString()})`.mapWith(Number),
     }).from(posts),
+    openReportCount(),
   ]);
   res.json({
     recentUsers: recentUsers.map(formatUser),
@@ -106,6 +100,7 @@ router.get("/overview", async (req, res) => {
     metrics: [
       { label: "Users", value: String(userCounts.total), detail: `${userCounts.today} in the last 24 hours` },
       { label: "Posts and replies", value: String(postCounts.total), detail: `${postCounts.today} in the last 24 hours` },
+      { label: "Open reports", value: String(openReports.total), detail: `${openReports.today} in the last 24 hours` },
     ],
   });
 });
@@ -292,14 +287,6 @@ router.get("/users", async (req, res) => {
     canEditBadges: viewer.role === "admin",
   });
 });
-
-async function requireAdminWrite(req: Request) {
-  const viewer = await requireStaff(req);
-  if (!env.ADMIN_ORIGIN) throw new AuthError(503, "admin_login_not_configured");
-  requireOrigin(req, env.ADMIN_ORIGIN);
-  if (viewer.role !== "admin") throw new AuthError(403, "admin_required");
-  return viewer;
-}
 
 const accountAction = z.discriminatedUnion("action", [
   z.strictObject({ action: z.literal("ban"), reason: z.string().trim().min(1).max(280).refine((value) => !value.includes("\u0000")) }),

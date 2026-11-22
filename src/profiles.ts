@@ -18,6 +18,7 @@ import { AuthError } from "./auth/provider.ts";
 import { postSelection, serializePost } from "./post-data.ts";
 import { banDetailsSelection, githubProfileSelection, publicProfileSelection, userSelection } from "./user-data.ts";
 import { recordNotification } from "./notification-events.ts";
+import { blockState, notBlockedSql, requireNotBlocked } from "./blocks.ts";
 import { badgeIconDirectory, isBadgeIcon } from "./profile-badges.ts";
 import { generalPronounRecommendations, pronounRecommendations, pronounsLimit, pronounsSchema } from "./pronouns.ts";
 
@@ -146,6 +147,53 @@ router.get("/:handle/card", async (req, res) => {
     signedIn: viewerId !== null,
   });
 });
+const connectionQuery = z.object({
+  cursor: z.string().regex(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z\|[0-9a-f-]{36}$/i).optional(),
+});
+const connectionPage = 50;
+
+router.get("/:handle/:list", async (req, res, next) => {
+  const list = z.enum(["followers", "following"]).safeParse(req.params.list);
+  if (!list.success) return next();
+  const handle = handleSchema.safeParse(req.params.handle.toLowerCase());
+  const query = connectionQuery.safeParse(req.query);
+  if (!handle.success) throw new AuthError(404, "profile_not_found");
+  if (!query.success) throw new AuthError(400, "invalid_connection_query");
+  const [profile] = await db.select({ id: users.id }).from(users)
+    .where(and(eq(users.handle, handle.data), isNull(users.bannedAt)));
+  if (!profile) throw new AuthError(404, "profile_not_found");
+  const viewerId = await readViewerId(req);
+  const followers = list.data === "followers";
+  const [cursorTime, cursorId] = query.data.cursor?.split("|") ?? [];
+  const other = followers ? userFollows.followerId : userFollows.followingId;
+  const rows = await db.select({ ...userSelection, bio: users.bio, followedAt: userFollows.createdAt })
+    .from(userFollows)
+    .innerJoin(users, eq(users.id, other))
+    .where(and(
+      eq(followers ? userFollows.followingId : userFollows.followerId, profile.id),
+      isNull(users.bannedAt),
+      notBlockedSql(viewerId, other),
+      cursorTime ? sql`(${userFollows.createdAt}, ${other}) < (${cursorTime}::timestamptz, ${cursorId}::uuid)` : undefined,
+    ))
+    .orderBy(desc(userFollows.createdAt), desc(other))
+    .limit(connectionPage + 1);
+  const page = rows.slice(0, connectionPage);
+  const last = page.at(-1);
+  const followed = viewerId && page.length
+    ? new Set((await db.select({ id: userFollows.followingId }).from(userFollows).where(and(
+      eq(userFollows.followerId, viewerId), inArray(userFollows.followingId, page.map(({ id }) => id)),
+    ))).map(({ id }) => id))
+    : new Set<string>();
+  res.json({
+    users: page.map(({ followedAt: _followedAt, ...user }) => ({
+      ...user,
+      isSelf: user.id === viewerId,
+      isFollowing: followed.has(user.id),
+    })),
+    nextCursor: rows.length > connectionPage && last ? `${last.followedAt.toISOString()}|${last.id}` : null,
+  });
+});
+
 router.get("/:handle", async (req, res) => {
   if (!handleSchema.safeParse(req.params.handle).success) {
     throw new AuthError(404, "profile_not_found");
@@ -172,6 +220,14 @@ router.get("/:handle", async (req, res) => {
     return;
   }
   const viewerId = await readViewerId(req);
+  const blocks = await blockState(db, viewerId, profile.id);
+  if (blocks.blocking || blocks.blockedBy) {
+    res.json({
+      profile, ...blocks, isFollowing: false, isFollowedBy: false,
+      posts: [], replies: [], reposts: [], repostedBy: {}, serverNow: new Date().toISOString(),
+    });
+    return;
+  }
   const relationships = viewerId
     ? await db
         .select({
@@ -244,6 +300,8 @@ router.get("/:handle", async (req, res) => {
   );
   res.json({
     profile,
+    blocking: false,
+    blockedBy: false,
     isFollowing: relationships.some(
       (relationship) => relationship.followerId === viewerId,
     ),
@@ -279,6 +337,7 @@ async function setFollow(req: Request, follow: boolean) {
       .for("no key update");
     if (!target) throw new AuthError(404, "profile_not_found");
     if (target.id === viewer.id) throw new AuthError(400, "cannot_follow_self");
+    if (follow) await requireNotBlocked(tx, viewer.id, target.id);
     if (follow) {
       const [inserted] = await tx
         .insert(userFollows)

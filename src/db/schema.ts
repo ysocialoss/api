@@ -562,6 +562,86 @@ export const notifications = pgTable(
   ],
 );
 
+export const userBlocks = pgTable(
+  "user_blocks",
+  {
+    blockerId: uuid("blocker_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    blockedId: uuid("blocked_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.blockerId, table.blockedId] }),
+    index("user_blocks_blocked_idx").on(table.blockedId, table.blockerId),
+    check("user_blocks_not_self", sql`${table.blockerId} <> ${table.blockedId}`),
+  ],
+);
+
+export const reportTargetType = pgEnum("report_target_type", ["post", "user", "message"]);
+export const reportStatus = pgEnum("report_status", ["open", "resolved", "dismissed"]);
+
+export type ReportSnapshot =
+  | {
+      type: "post";
+      kind: "Post" | "Reply" | "Quote";
+      authorHandle: string;
+      authorName: string;
+      content: string;
+      parentId: string | null;
+      quotedPostId: string | null;
+      gifUrl: string | null;
+      imageIds: string[];
+      hasVoice: boolean;
+      pollTitle: string | null;
+      createdAt: string;
+    }
+  | {
+      type: "user";
+      handle: string;
+      displayName: string;
+      bio: string;
+      pronouns: string;
+      avatarUrl: string | null;
+      bannerUrl: string | null;
+    }
+  | {
+      type: "message";
+      peerHandle: string;
+      messages: { id: string; senderId: string; senderHandle: string; text: string; createdAt: string; reported: boolean }[];
+    };
+
+export const reports = pgTable("reports", {
+  id: uuid().defaultRandom().primaryKey(),
+  reporterId: uuid("reporter_id").references(() => users.id, { onDelete: "set null" }),
+  reporterHandle: text("reporter_handle").notNull(),
+  targetType: reportTargetType("target_type").notNull(),
+  targetKey: uuid("target_key").notNull(),
+  targetUserId: uuid("target_user_id").references(() => users.id, { onDelete: "set null" }),
+  targetHandle: text("target_handle").notNull(),
+  conversationId: uuid("conversation_id"),
+  reason: text().notNull(),
+  details: text().notNull().default(""),
+  snapshot: jsonb().$type<ReportSnapshot>().notNull(),
+  status: reportStatus().notNull().default("open"),
+  resolution: text(),
+  note: text(),
+  resolvedById: uuid("resolved_by_id"),
+  resolvedByHandle: text("resolved_by_handle"),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true, precision: 3 }),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  index("reports_queue_idx").on(table.status, table.createdAt.desc(), table.id.desc()),
+  index("reports_target_idx").on(table.targetType, table.targetKey, table.status),
+  index("reports_target_user_idx").on(table.targetUserId),
+  index("reports_reporter_idx").on(table.reporterId, table.createdAt.desc()),
+  uniqueIndex("reports_open_unique").on(table.reporterId, table.targetType, table.targetKey)
+    .where(sql`${table.status} = 'open'`),
+  check("reports_reason_check", sql`${table.reason} in ('spam', 'harassment', 'hate', 'violence', 'sexual', 'self_harm', 'misinformation', 'impersonation', 'illegal', 'other')`),
+  check("reports_details_check", sql`char_length(${table.details}) <= 1000`),
+  check("reports_note_check", sql`char_length(${table.note}) <= 1000`),
+  check("reports_conversation_check", sql`(${table.targetType} = 'message') = (${table.conversationId} is not null)`),
+  check("reports_resolution_check", sql`(${table.status} = 'open') = (${table.resolvedAt} is null)`),
+]);
+
 export const pushSubscriptions = pgTable(
   "push_subscriptions",
   {
