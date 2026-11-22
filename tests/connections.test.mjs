@@ -32,6 +32,7 @@ test("profile connections link, show, protect and unlink for every provider", as
       SESSION_ENCRYPTION_KEY: "a".repeat(64),
       DISCORD_CLIENT_ID: "d-id", DISCORD_CLIENT_SECRET: "d-secret",
       TWITCH_CLIENT_ID: "t-id", TWITCH_CLIENT_SECRET: "t-secret",
+      STEAM_API_KEY: "s-key",
     });
     database = await import("../src/db/index.ts");
     const { app } = await import("../src/app.ts");
@@ -80,8 +81,12 @@ test("profile connections link, show, protect and unlink for every provider", as
 
     const list = await (await call(alice, "GET", "/api/connections")).json();
     assert.deepEqual(list.providers.map(({ provider, configured }) => [provider, configured]),
-      [["discord", true], ["twitch", true]]);
-    assert.equal((await call(alice, "POST", "/api/connections/spotify/connect", {})).status, 404);
+      [["discord", true], ["twitch", true], ["steam", true], ["spotify", true], ["apple_music", true]]);
+    assert.equal((await call(alice, "POST", "/api/connections/spotify/connect", {})).status, 400);
+    assert.equal((await call(alice, "POST", "/api/connections/spotify/link", { url: "https://evil.example/user/x" })).status, 400);
+    assert.equal((await call(alice, "POST", "/api/connections/spotify/link", { url: "https://open.spotify.com/user/alice_s?si=1" })).status, 201);
+    assert.equal((await call(alice, "POST", "/api/connections/spotify/link", { url: "https://open.spotify.com/user/other" })).status, 409);
+    assert.equal((await call(alice, "DELETE", "/api/connections/spotify")).status, 204);
     assert.equal((await call(alice, "POST", "/api/connections/myspace/connect", {})).status, 404);
 
     async function link(who, provider, query = {}) {
