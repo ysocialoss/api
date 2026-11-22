@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { db } from "./db/index.ts";
 
 const change = z.discriminatedUnion("type", [
-  z.strictObject({ type: z.literal("conversation"), id: z.uuid(), roster: z.boolean(), message: z.uuid().optional() }),
+  z.strictObject({ type: z.literal("conversation"), id: z.uuid(), roster: z.boolean(), message: z.uuid().optional(), read: z.literal(true).optional() }),
   z.strictObject({ type: z.literal("typing"), id: z.uuid(), userId: z.uuid() }),
   z.strictObject({ type: z.literal("devices") }),
   z.strictObject({ type: z.literal("notifications") }),

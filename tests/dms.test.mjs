@@ -162,7 +162,11 @@ test("DMs preserve legacy notifications and update live readers across API repli
       const send = (user, status = 204, ...recipients) => request(user, requestPath + "/messages", {
         method: "POST", body: user.device.message(requestId, recipients.length ? recipients : [carol.device, bob.device]), status,
       });
-      for (let count = 0; count < 3; count++) await send(carol);
+      for (let count = 0; count < 2; count++) await send(carol);
+      const third = carol.device.message(requestId, [carol.device, bob.device]);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await request(carol, requestPath + "/messages", { method: "POST", body: third, status: 204 });
+      }
       await send(carol, 409);
       await send(bob, 409);
       assert.equal((await context(carol, requestPath)).requestSent, 3);
@@ -247,6 +251,9 @@ test("DMs preserve legacy notifications and update live readers across API repli
         });
       }
       assert.equal(await unread(), 0);
+      assert.deepEqual(await event("conversation", (frame) => frame.read), {
+        type: "conversation", id, roster: false, read: true,
+      });
     });
 
     await t.test("people can react to, edit and delete messages", async () => {
