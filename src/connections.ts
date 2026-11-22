@@ -10,10 +10,14 @@ import { connectionLinkAttempts, connections, users } from "./db/schema.ts";
 import { liveTwitchStreams } from "./twitch-live.ts";
 import {
   exchangeProviderCode,
+  isLinkProvider,
+  isOAuthProvider,
   isProvider,
+  parseProfileLink,
   providerAuthorizeUrl,
   providerConfigured,
   providerIds,
+  verifySteamLogin,
   type ConnectionProvider,
 } from "./connection-providers.ts";
 
@@ -63,6 +67,7 @@ router.get("/", async (req, res) => {
 router.post("/:provider/connect", async (req, res) => {
   const provider = parseProvider(req.params.provider);
   const { id } = await requireUser(req);
+  if (isLinkProvider(provider)) throw new AuthError(400, "invalid_connection");
   if (!providerConfigured(provider)) throw new AuthError(503, "connection_not_configured");
   const input = connectInput.safeParse(req.body);
   if (!input.success) throw new AuthError(400, "invalid_connection");
@@ -83,6 +88,30 @@ router.post("/:provider/connect", async (req, res) => {
       .onConflictDoUpdate({ target: [connectionLinkAttempts.userId, connectionLinkAttempts.provider], set: attempt });
   });
   res.json({ url: providerAuthorizeUrl(provider, state, verifier) });
+});
+
+const linkInput = z.strictObject({ url: z.string().trim().min(1).max(300) });
+router.post("/:provider/link", async (req, res) => {
+  const provider = parseProvider(req.params.provider);
+  const { id } = await requireUser(req);
+  if (!isLinkProvider(provider)) throw new AuthError(400, "invalid_connection");
+  const input = linkInput.safeParse(req.body);
+  const identity = input.success ? parseProfileLink(provider, input.data.url) : null;
+  if (!identity) throw new AuthError(400, "invalid_profile_link");
+  const created = await db.transaction(async (tx) => {
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, id)).for("update");
+    const [row] = await tx.insert(connections).values({
+      userId: id,
+      provider,
+      externalId: `user:${id}`,
+      username: identity.username,
+      displayName: identity.displayName,
+      profileUrl: identity.url,
+    }).onConflictDoNothing().returning(connectionSelection);
+    return row;
+  });
+  if (!created) throw new AuthError(409, "connection_already_connected");
+  res.status(201).json({ connection: created });
 });
 
 router.get("/:provider/callback", async (req, res) => {
@@ -107,15 +136,22 @@ router.get("/:provider/callback", async (req, res) => {
     if (!attempt) throw new AuthError(400, "connection_invalid_state");
     if (state.data.startsWith(profileStatePrefix)) returnPath = `/@${handle}`;
 
-    if (typeof req.query.error === "string") {
+    if (typeof req.query.error === "string" || req.query["openid.mode"] === "cancel") {
       await db.delete(connectionLinkAttempts).where(matchingAttempt());
       redirect("cancelled");
       return;
     }
 
-    const code = z.string().min(1).max(4096).safeParse(req.query.code);
-    if (!code.success) throw new AuthError(400, "connection_failed");
-    const identity = await exchangeProviderCode(provider, code.data, attempt.verifier);
+    let identity;
+    if (provider === "steam") {
+      identity = await verifySteamLogin(req.query, state.data);
+    } else if (isOAuthProvider(provider)) {
+      const code = z.string().min(1).max(4096).safeParse(req.query.code);
+      if (!code.success) throw new AuthError(400, "connection_failed");
+      identity = await exchangeProviderCode(provider, code.data, attempt.verifier);
+    } else {
+      throw new AuthError(400, "connection_failed");
+    }
     if ((await requireApprovedUser(req)).id !== id) throw new AuthError(400, "connection_invalid_state");
     const linked = await db.transaction(async (tx) => {
       const [owner] = await tx.select({ approvedAt: users.approvedAt, bannedAt: users.bannedAt })
