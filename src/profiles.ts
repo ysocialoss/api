@@ -12,7 +12,7 @@ import {
 } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "./db/index.ts";
-import { authIdentities, connections, githubConnections, posts, users, userFollows, userHandles } from "./db/schema.ts";
+import { authIdentities, connections, githubConnections, posts, profilePins, userDomains, users, userFollows, userHandles } from "./db/schema.ts";
 import { publishAccountChange } from "./live-events.ts";
 import { removeUser } from "./user-removal.ts";
 import { profileReposts } from "./feed-entries.ts";
@@ -259,6 +259,11 @@ router.get("/:handle", async (req, res) => {
     .from(connections)
     .where(eq(connections.userId, profile.id))
     .orderBy(connections.createdAt);
+  const linkedDomains = await db
+    .select({ domain: userDomains.domain })
+    .from(userDomains)
+    .where(and(eq(userDomains.userId, profile.id), isNotNull(userDomains.verifiedAt)))
+    .orderBy(userDomains.verifiedAt, userDomains.domain);
   const blocks = await blockState(db, viewerId, profile.id);
   if (blocks.blocking || blocks.blockedBy) {
     res.json({
@@ -267,7 +272,7 @@ router.get("/:handle", async (req, res) => {
     });
     return;
   }
-  const [relationships, recent, replies, { posts: reposts, repostedBy }] = await Promise.all([
+  const [relationships, recent, replies, { posts: reposts, repostedBy }, [pinned]] = await Promise.all([
     viewerId
       ? db
           .select({
@@ -303,6 +308,12 @@ router.get("/:handle", async (req, res) => {
       .orderBy(desc(posts.createdAt), desc(posts.id))
       .limit(20),
     profileReposts(profile, viewerId),
+    db
+      .select(postSelection(viewerId))
+      .from(profilePins)
+      .innerJoin(posts, eq(posts.id, profilePins.postId))
+      .innerJoin(users, eq(users.id, posts.authorId))
+      .where(eq(profilePins.userId, profile.id)),
   ]);
   const ancestry =
     replies.length === 0
@@ -340,7 +351,8 @@ router.get("/:handle", async (req, res) => {
     ancestors.map((post) => [post.id, serializePost(post)]),
   );
   res.json({
-    profile: { ...profile, connections: linkedConnections },
+    profile: { ...profile, connections: linkedConnections, domains: linkedDomains.map(({ domain }) => domain) },
+    pinnedPost: pinned ? serializePost(pinned) : null,
     blocking: false,
     blockedBy: false,
     isFollowing: relationships.some(

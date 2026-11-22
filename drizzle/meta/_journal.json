@@ -393,6 +393,13 @@
       "when": 1795363373684,
       "tag": "0055_connections",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1795372972546,
+      "tag": "0056_saves_pins_domains",
+      "breakpoints": true
     }
   ]
 }

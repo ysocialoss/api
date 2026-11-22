@@ -4,6 +4,7 @@ import {
   serializePost,
   reactionSelection,
   repostSelection,
+  saveSelection,
   pollSelection,
   mutualFollowSql,
   repostVisibleSql,
@@ -35,13 +36,15 @@ import {
   notifications,
   postMentions,
   postReposts,
+  postSaves,
   postTopics,
+  profilePins,
   posts,
   postImages,
   mediaDeletions,
   users,
 } from "./db/schema.ts";
-import { requireUser, readViewerId } from "./auth/request.ts";
+import { requireUser, requireApprovedUser, readViewerId } from "./auth/request.ts";
 import { AuthError } from "./auth/provider.ts";
 import { userSelection } from "./user-data.ts";
 import { recordNotification } from "./notification-events.ts";
@@ -463,6 +466,49 @@ router.post("/", async (req, res) => {
     serverNow: new Date().toISOString(),
   });
 });
+router.get("/saved", async (req, res) => {
+  const { id: viewerId } = await requireApprovedUser(req);
+  let cursor: z.infer<typeof cursorSchema> | undefined;
+  if (req.query.cursor !== undefined) {
+    try {
+      if (typeof req.query.cursor !== "string" || req.query.cursor.length > 512) throw new Error();
+      cursor = cursorSchema.parse(JSON.parse(Buffer.from(req.query.cursor, "base64url").toString("utf8")));
+    } catch {
+      throw new AuthError(400, "invalid_cursor");
+    }
+  }
+  const rows = await db
+    .select({ ...postSelection(viewerId), savedAt: postSaves.createdAt })
+    .from(postSaves)
+    .innerJoin(posts, eq(posts.id, postSaves.postId))
+    .innerJoin(users, eq(users.id, posts.authorId))
+    .where(
+      and(
+        eq(postSaves.userId, viewerId),
+        isNull(users.bannedAt),
+        notBlockedSql(viewerId, posts.authorId),
+        cursor
+          ? or(
+              lt(postSaves.createdAt, new Date(cursor.createdAt)),
+              and(eq(postSaves.createdAt, new Date(cursor.createdAt)), lt(postSaves.postId, cursor.id)),
+            )
+          : undefined,
+      ),
+    )
+    .orderBy(desc(postSaves.createdAt), desc(postSaves.postId))
+    .limit(21);
+  const page = rows.slice(0, 20);
+  const last = page.at(-1);
+  res.json({
+    repostedBy: {},
+    posts: page.map(({ savedAt: _savedAt, ...row }) => serializePost(row)),
+    nextCursor:
+      rows.length > 20 && last
+        ? Buffer.from(JSON.stringify({ createdAt: last.savedAt.toISOString(), id: last.id })).toString("base64url")
+        : null,
+    serverNow: new Date().toISOString(),
+  });
+});
 router.use("/:id", (req, _res, next) => {
   if (!z.uuid().safeParse(req.params.id).success)
     throw new AuthError(400, "invalid_post_id");
@@ -869,6 +915,72 @@ router.put("/:id/repost", async (req, res) => {
 });
 router.delete("/:id/repost", async (req, res) => {
   res.json(await setRepost(req, false));
+});
+async function setSave(req: Request, saved: boolean) {
+  const user = await requireUser(req);
+  const parsedId = z.uuid().safeParse(req.params.id);
+  if (!parsedId.success) throw new AuthError(400, "invalid_post_id");
+  const id = parsedId.data;
+  return db.transaction(async (tx) => {
+    const [post] = await tx
+      .select({ id: posts.id, authorId: posts.authorId })
+      .from(posts)
+      .where(and(eq(posts.id, id), visiblePostAuthor))
+      .for("key share");
+    if (!post) throw new AuthError(404, "post_not_found");
+    if (saved) {
+      await requireNotBlocked(tx, user.id, post.authorId);
+      await tx.insert(postSaves).values({ postId: id, userId: user.id }).onConflictDoNothing();
+    } else {
+      await tx.delete(postSaves).where(and(eq(postSaves.postId, id), eq(postSaves.userId, user.id)));
+    }
+    const [state] = await tx.select(saveSelection(user.id)).from(posts).where(eq(posts.id, id));
+    return state;
+  });
+}
+router.put("/:id/save", async (req, res) => {
+  res.json(await setSave(req, true));
+});
+router.delete("/:id/save", async (req, res) => {
+  res.json(await setSave(req, false));
+});
+async function setPin(req: Request, pinned: boolean) {
+  const user = await requireUser(req);
+  const parsedId = z.uuid().safeParse(req.params.id);
+  if (!parsedId.success) throw new AuthError(400, "invalid_post_id");
+  const id = parsedId.data;
+  return db.transaction(async (tx) => {
+    const [post] = await tx
+      .select({ id: posts.id, authorId: posts.authorId, parentId: posts.parentId })
+      .from(posts)
+      .where(eq(posts.id, id))
+      .for("key share");
+    if (!post) throw new AuthError(404, "post_not_found");
+    if (post.authorId !== user.id) throw new AuthError(403, "not_post_author");
+    const [previous] = await tx
+      .select({ postId: profilePins.postId })
+      .from(profilePins)
+      .where(eq(profilePins.userId, user.id))
+      .for("update");
+    if (pinned) {
+      if (post.parentId) throw new AuthError(400, "invalid_pin");
+      await tx
+        .insert(profilePins)
+        .values({ userId: user.id, postId: id })
+        .onConflictDoUpdate({ target: profilePins.userId, set: { postId: id, createdAt: sql`now()` } });
+    } else {
+      await tx.delete(profilePins).where(and(eq(profilePins.userId, user.id), eq(profilePins.postId, id)));
+    }
+    const changed = [id, ...(previous && previous.postId !== id ? [previous.postId] : [])];
+    await publishLiveChange(tx, changed);
+    return { pinned, previousPinnedId: pinned && previous?.postId !== id ? (previous?.postId ?? null) : null };
+  });
+}
+router.put("/:id/pin", async (req, res) => {
+  res.json(await setPin(req, true));
+});
+router.delete("/:id/pin", async (req, res) => {
+  res.json(await setPin(req, false));
 });
 router.patch("/:id", async (req, res) => {
   const user = await requireUser(req);

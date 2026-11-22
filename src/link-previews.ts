@@ -236,6 +236,10 @@ export async function previewsForPost(content: string, offset = 0) {
 export async function previewIconForPost(content: string, key: string) {
   const source = websiteLinks(content).find((url) => assetKey(url) === key);
   if (!source) return;
+  return iconForSite(source);
+}
+
+export async function iconForSite(source: URL) {
   const direct = imgurImageUrl(source);
   const icon = direct ? imgurFavicon : (await metadataFor(source))?.icon;
   if (!icon) return;

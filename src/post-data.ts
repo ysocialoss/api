@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
-import { postLikes, postReposts, posts, users } from "./db/schema.ts";
+import { postLikes, postReposts, postSaves, posts, profilePins, users } from "./db/schema.ts";
 import { avatarUrlSelection, userSelection } from "./user-data.ts";
 import type { PollDefinition } from "./poll-schema.ts";
 
@@ -30,6 +30,17 @@ export function reactionSelection(viewerId: string | null) {
         : sql<boolean>`exists(select 1 from ${postLikes} where ${postLikes.postId} = ${posts.id} and ${postLikes.userId} = ${viewerId})`,
   };
 }
+export function saveSelection(viewerId: string | null) {
+  return {
+    saved:
+      viewerId === null
+        ? sql<boolean>`false`
+        : sql<boolean>`exists(select 1 from ${postSaves} where ${postSaves.postId} = ${posts.id} and ${postSaves.userId} = ${viewerId})`,
+  };
+}
+export const pinnedSelection = {
+  pinned: sql<boolean>`exists(select 1 from ${profilePins} where ${profilePins.postId} = ${posts.id})`,
+};
 // "Friends" are mutual follows. True when the viewer and the user in `other`
 // follow each other.
 export const mutualFollowSql = (viewerId: string, other: ReturnType<typeof sql>) => sql`(
@@ -145,6 +156,8 @@ export function friendLikeSelection(viewerId: string | null) {
 }
 export const postSelection = (viewerId: string | null) => ({
   ...reactionSelection(viewerId),
+  ...saveSelection(viewerId),
+  ...pinnedSelection,
   ...friendLikeSelection(viewerId),
   ...repostSelection(viewerId),
   ...quoteSelection,
