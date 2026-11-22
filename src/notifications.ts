@@ -234,14 +234,15 @@ router.patch("/push/mute", async (req, res) => {
   const input = z
     .strictObject({
       endpoint: endpointSchema,
-      duration: z.enum(["1h", "8h", "forever", "off"]),
+      duration: z.enum(["1h", "8h", "24h", "1w", "forever", "off"]),
     })
     .safeParse(req.body);
   if (!input.success) throw new AuthError(400, "invalid_push_mute");
   const { endpoint, duration } = input.data;
+  const muteHours = { "1h": 1, "8h": 8, "24h": 24, "1w": 168 } as const;
   const mutedUntil =
-    duration === "1h" || duration === "8h"
-      ? new Date(Date.now() + (duration === "1h" ? 1 : 8) * 3600_000)
+    duration in muteHours
+      ? new Date(Date.now() + muteHours[duration as keyof typeof muteHours] * 3600_000)
       : null;
   const saved = await db.transaction(async (tx) => {
     const [saved] = await tx

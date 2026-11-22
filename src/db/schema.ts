@@ -191,6 +191,34 @@ export const githubLinkAttempts = pgTable("github_link_attempts", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 });
 
+export const connectionProviders = ["discord", "twitch"] as const;
+
+export const connectionLinkAttempts = pgTable("connection_link_attempts", {
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  provider: text().notNull(),
+  stateHash: text("state_hash").notNull(),
+  sessionHash: text("session_hash").notNull(),
+  verifier: text().notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.userId, table.provider] }),
+]);
+
+export const connections = pgTable("connections", {
+  id: uuid().defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  provider: text().notNull(),
+  externalId: text("external_id").notNull(),
+  username: text().notNull(),
+  displayName: text("display_name").notNull(),
+  profileUrl: text("profile_url").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  unique("connections_user_provider_unique").on(table.userId, table.provider),
+  unique("connections_provider_external_unique").on(table.provider, table.externalId),
+  check("connections_provider_check", sql`${table.provider} in ('discord', 'twitch')`),
+]);
+
 export const githubConnections = pgTable("github_connections", {
   id: uuid().defaultRandom().primaryKey(),
   userId: uuid("user_id").notNull().unique().references(() => users.id, { onDelete: "cascade" }),

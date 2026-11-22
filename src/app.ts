@@ -7,6 +7,7 @@ import { startVoiceJobs } from "./storage/voice-jobs.ts";
 import { checkAvatarStorage } from "./storage/r2.ts";
 import profiles from "./profiles.ts";
 import github from "./github.ts";
+import connectionRoutes from "./connections.ts";
 import { startGithubRefresh } from "./github-contribution-jobs.ts";
 import posts from "./posts.ts";
 import postImages, { startPostImageCleanup } from "./post-images.ts";
@@ -66,6 +67,7 @@ app.use("/api/search", search);
 app.use("/api/dms", dms);
 app.use("/api/profiles", profiles);
 app.use("/api/github", github);
+app.use("/api/connections", connectionRoutes);
 app.use("/api/avatars", avatars);
 app.use("/api/banners", banners);
 app.use("/api/voices", voices);
@@ -187,6 +189,8 @@ if (import.meta.main) {
       to_regclass('public.auth_sessions') IS NOT NULL AND
       to_regclass('public.auth_identities') IS NOT NULL AND
       to_regclass('public.oauth_transactions') IS NOT NULL AND
+      to_regclass('public.connections') IS NOT NULL AND
+      to_regclass('public.connection_link_attempts') IS NOT NULL AND
       to_regclass('public.github_connections') IS NOT NULL AND
       to_regclass('public.github_link_attempts') IS NOT NULL AND
       to_regclass('public.github_contribution_jobs') IS NOT NULL AS ready`);
