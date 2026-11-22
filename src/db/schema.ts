@@ -191,7 +191,7 @@ export const githubLinkAttempts = pgTable("github_link_attempts", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 });
 
-export const connectionProviders = ["discord", "twitch"] as const;
+export const connectionProviders = ["discord", "twitch", "steam", "spotify", "apple_music"] as const;
 
 export const connectionLinkAttempts = pgTable("connection_link_attempts", {
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
@@ -216,7 +216,21 @@ export const connections = pgTable("connections", {
 }, (table) => [
   unique("connections_user_provider_unique").on(table.userId, table.provider),
   unique("connections_provider_external_unique").on(table.provider, table.externalId),
-  check("connections_provider_check", sql`${table.provider} in ('discord', 'twitch')`),
+  check("connections_provider_check", sql`${table.provider} in ('discord', 'twitch', 'steam', 'spotify', 'apple_music')`),
+]);
+
+export const userDomains = pgTable("user_domains", {
+  id: uuid().defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  domain: text().notNull(),
+  token: text().notNull(),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  unique("user_domains_user_domain_unique").on(table.userId, table.domain),
+  uniqueIndex("user_domains_verified_domain_idx").on(table.domain).where(sql`${table.verifiedAt} is not null`),
+  index("user_domains_user_idx").on(table.userId),
+  check("user_domains_domain_check", sql`${table.domain} ~ '^[a-z0-9.-]{3,253}$'`),
 ]);
 
 export const githubConnections = pgTable("github_connections", {
@@ -418,6 +432,29 @@ export const postLikes = pgTable(
     index("post_likes_user_idx").on(table.userId),
   ],
 );
+
+export const postSaves = pgTable(
+  "post_saves",
+  {
+    postId: uuid("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.postId, table.userId] }),
+    index("post_saves_user_idx").on(table.userId, table.createdAt.desc(), table.postId.desc()),
+  ],
+);
+
+export const profilePins = pgTable("profile_pins", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  postId: uuid("post_id").notNull().references(() => posts.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const postReposts = pgTable(
   "post_reposts",
