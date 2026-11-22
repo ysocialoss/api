@@ -288,6 +288,20 @@
       "when": 1795129477716,
       "tag": "0040_profile_pronouns",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1795368349898,
+      "tag": "0041_paints",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1795368362898,
+      "tag": "0042_seed_paints",
+      "breakpoints": true
     }
   ]
 }

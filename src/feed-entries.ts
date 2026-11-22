@@ -2,10 +2,10 @@ import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "./db/index.ts";
 import { posts, users } from "./db/schema.ts";
 import { postSelection, repostVisibleSql, serializePost } from "./post-data.ts";
-import { userSelection } from "./user-data.ts";
+import { type UserPaint, userSelection } from "./user-data.ts";
 import { attachSelfReplies } from "./self-replies.ts";
 
-type FeedUser = { id: string; handle: string; displayName: string; avatarUrl: string | null };
+type FeedUser = { id: string; handle: string; displayName: string; avatarUrl: string | null; paint: UserPaint | null };
 type Audience = "public" | "friends";
 type PostRecord = ReturnType<typeof serializePost<Awaited<ReturnType<typeof selectPosts>>[number]>>;
 

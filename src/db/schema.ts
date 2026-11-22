@@ -513,20 +513,31 @@ export const pushDeliveries = pgTable(
 );
 
 export const paints = pgTable("paints", {
-  id: uuid("paints_id").primaryKey().defaultRandom().notNull(),
-  name: text().notNull(),
+  id: uuid().defaultRandom().primaryKey(),
+  name: text().notNull().unique("paints_name_unique"),
   definition: jsonb().$type<PaintDefinition>().notNull(),
-  isFree: boolean().default(false).notNull(),
-  sortOrder: integer().notNull(),
-  createdAt: timestamp().notNull(),
+  isFree: boolean("is_free").notNull().default(false),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
 });
 
-export const userPaints = pgTable("user_paints", {
-  userId: uuid("user_id")
-    .references(() => users.id, { onDelete: "cascade" })
-    .notNull(),
-  paintId: uuid("paint_id").references(() => paints.id, {
-    onDelete: "cascade",
-  }),
-  grantedAt: timestamp().notNull(),
-});
+export const userPaints = pgTable(
+  "user_paints",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    paintId: uuid("paint_id")
+      .notNull()
+      .references(() => paints.id, { onDelete: "cascade" }),
+    grantedAt: timestamp("granted_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.paintId] }),
+    index("user_paints_paint_idx").on(table.paintId),
+  ],
+);
