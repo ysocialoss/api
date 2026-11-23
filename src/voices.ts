@@ -128,14 +128,14 @@ router.get("/:file", async (req, res) => {
     throw new AuthError(404, "voice_not_found");
   const key = `voices/${file.data}`;
   const [post] = await db
-    .select({ bannedAt: users.bannedAt })
+    .select({ bannedAt: users.bannedAt, hiddenAt: posts.hiddenAt })
     .from(posts)
     .innerJoin(users, eq(posts.authorId, users.id))
     .where(eq(sql`${posts.voice}->>'key'`, key))
     .limit(1);
   if (!post) throw new AuthError(404, "voice_not_found");
   res.set("Cache-Control", "private, no-store");
-  if (post.bannedAt) {
+  if (post.bannedAt || post.hiddenAt) {
     const session = await readSession(cookie(req, "session"));
     const viewer = session.kind === "authenticated" ? session.user : null;
     if (!viewer?.approvedAt || viewer.bannedAt || (viewer.role !== "admin" && viewer.role !== "moderator"))

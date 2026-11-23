@@ -14,7 +14,7 @@ import {
 import { env } from "./config.ts";
 import { userSelection } from "./user-data.ts";
 import { pushNotificationContent } from "./notification-content.ts";
-import { visiblePostAuthor } from "./post-data.ts";
+import { visiblePost } from "./post-data.ts";
 
 const recipient = alias(users, "push_recipient");
 
@@ -55,7 +55,7 @@ export async function flushPushDeliveries(send = webpush.sendNotification) {
         .from(notifications)
         .innerJoin(users, eq(users.id, notifications.actorId))
         .innerJoin(recipient, and(eq(recipient.id, notifications.recipientId), sql`${recipient.bannedAt} is null`))
-        .leftJoin(posts, and(eq(posts.id, notifications.postId), visiblePostAuthor))
+        .leftJoin(posts, and(eq(posts.id, notifications.postId), visiblePost))
         .innerJoin(
           pushSubscriptions,
           eq(pushSubscriptions.id, job.subscriptionId),

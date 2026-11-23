@@ -2,7 +2,7 @@ import { Router } from "express";
 import { and, asc, count, desc, eq, gt, gte, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
-import { requireAdminWrite, requireStaff } from "./admin-access.ts";
+import { requireAdminWrite, requireStaff, requireStaffWrite } from "./admin-access.ts";
 import adminReports, { openReportCount } from "./admin-reports.ts";
 import { db } from "./db/index.ts";
 import { authIdentities, githubConnections, moderationActivity, pollVotes, postImageFlags, postImages, posts, userRole, users } from "./db/schema.ts";
@@ -64,6 +64,7 @@ const postFields = {
   imageIds: posts.imageIds,
   voiceUrl: sql<string | null>`${posts.voice}->>'url'`,
   hasPoll: sql<boolean>`${posts.poll} is not null`,
+  hiddenAt: posts.hiddenAt,
   kind: sql<"Post" | "Reply">`case when ${posts.parentId} is null then 'Post' else 'Reply' end`,
   time: posts.createdAt,
 };
@@ -140,7 +141,7 @@ router.get("/post/:id", async (req, res) => {
   }).from(posts)
     .innerJoin(users, eq(posts.authorId, users.id)).where(eq(posts.id, id));
   if (!post) throw new AuthError(404, "post_not_found");
-  res.json({ ...formatPost(post), kind: "post", type: post.kind, canRemove: viewer.role === "admin" });
+  res.json({ ...formatPost(post), kind: "post", type: post.kind, canRemove: viewer.role === "admin", canSetVisibility: true });
 });
 
 const userListQuery = z.object({
@@ -259,7 +260,8 @@ router.get("/posts", async (req, res) => {
     ))
     .orderBy(...contentOrder[sort])
     .limit(pageSize + 1).offset((page - 1) * pageSize);
-  res.json({ posts: rows.slice(0, pageSize).map(formatPost), hasNextPage: rows.length > pageSize, canModerate: viewer.role === "admin" });
+  res.json({ posts: rows.slice(0, pageSize).map(formatPost), hasNextPage: rows.length > pageSize,
+    canModerate: viewer.role === "admin", canSetVisibility: true });
 });
 
 router.get("/users", async (req, res) => {
@@ -389,6 +391,34 @@ router.patch("/posts/:id", async (req, res) => {
       actorId: viewer.id, actorHandle: actor.handle, targetId: id.data,
       targetHandle: author?.handle ?? "", action: "editPostText",
     });
+  });
+  res.sendStatus(204);
+});
+
+router.patch("/posts/:id/visibility", async (req, res) => {
+  const viewer = await requireStaffWrite(req);
+  const id = z.uuid().safeParse(req.params.id);
+  if (!id.success) throw new AuthError(404, "post_not_found");
+  const input = z.strictObject({ hidden: z.boolean() }).safeParse(req.body);
+  if (!input.success) throw new AuthError(400, "invalid_post_visibility");
+  const { hidden } = input.data;
+
+  await db.transaction(async (tx) => {
+    const [actor] = await tx.select({ role: users.role, handle: users.handle, bannedAt: users.bannedAt, approvedAt: users.approvedAt })
+      .from(users).where(eq(users.id, viewer.id)).for("share");
+    if (!actor?.approvedAt || actor.bannedAt || (actor.role !== "admin" && actor.role !== "moderator"))
+      throw new AuthError(403, "staff_required");
+    const [post] = await tx.select({ hiddenAt: posts.hiddenAt, authorId: posts.authorId })
+      .from(posts).where(eq(posts.id, id.data)).for("update");
+    if (!post) throw new AuthError(404, "post_not_found");
+    if (Boolean(post.hiddenAt) === hidden) return;
+    await tx.update(posts).set({ hiddenAt: hidden ? new Date() : null }).where(eq(posts.id, id.data));
+    const [author] = await tx.select({ handle: users.handle }).from(users).where(eq(users.id, post.authorId));
+    await tx.insert(moderationActivity).values({
+      actorId: viewer.id, actorHandle: actor.handle, targetId: id.data,
+      targetHandle: author?.handle ?? "", action: hidden ? "hidePost" : "unhidePost",
+    });
+    await publishLiveChange(tx, await affectedPostIds(tx, id.data));
   });
   res.sendStatus(204);
 });

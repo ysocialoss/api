@@ -1,0 +1,1 @@
+ALTER TABLE "posts" ADD COLUMN "hidden_at" timestamp (3) with time zone;
