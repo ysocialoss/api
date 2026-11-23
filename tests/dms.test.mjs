@@ -145,6 +145,16 @@ test("DMs preserve legacy notifications and update live readers across API repli
       body: { deviceId: recipient.device.id, response }, status: 204,
     });
     const context = (user, path) => request(user, path + "?device=" + user.device.id, { device: user.device });
+    const subscribeBob = async () => {
+      await pool.query("DELETE FROM push_subscriptions WHERE user_id = $1", [bob.id]);
+      await pool.query("INSERT INTO push_subscriptions (user_id, session_hash, endpoint, p256dh, auth) VALUES ($1, $2, $3, 'p', 'a')",
+        [bob.id, hash(bob.token), "https://push.invalid/" + randomUUID()]);
+    };
+    const flush = async () => {
+      const sent = [];
+      await flushPushDeliveries(async (_target, payload) => { sent.push(JSON.parse(payload)); });
+      return sent;
+    };
     const { id } = await open(alice, bob);
     const path = "/api/dms/conversations/" + id;
 
@@ -156,13 +166,68 @@ test("DMs preserve legacy notifications and update live readers across API repli
       assert.equal((await context(alice, path)).inviteStatus, "accepted");
     });
 
+    await t.test("message invites have their own alert preference and remain in Requests when muted", async () => {
+      const setAlert = (kind, enabled) => request(bob, "/api/notifications/preferences", {
+        method: "PATCH", body: { kind, enabled },
+      });
+      async function startRequest(handle) {
+        const sender = await account(handle);
+        await request(sender, "/api/dms/devices", { method: "POST", body: sender.device.registration, status: 204 });
+        const { id } = await open(sender, bob);
+        const path = "/api/dms/conversations/" + id;
+        const send = async () => {
+          const message = sender.device.message(id, [sender.device, bob.device]);
+          await request(sender, path + "/messages", { method: "POST", body: message, status: 204 });
+          return message;
+        };
+        return { id, path, send };
+      }
+
+      await subscribeBob();
+      await setAlert("dm_message", false);
+      const enabled = await startRequest("dm_invites_on");
+      assert.deepEqual(await flush(), []);
+      const first = await enabled.send();
+      await enabled.send();
+      const pushes = await flush();
+      assert.equal(pushes.length, 1);
+      assert.equal(pushes[0].body, "New chat invite");
+      assert.equal(pushes[0].url, "/messages/" + enabled.id);
+      assert.equal(pushes[0].chatRecipient, undefined);
+      assert.equal((await request(bob, "/api/dms/unread")).unread, 2);
+      await request(bob, enabled.path + "/read", {
+        method: "PUT", body: { deviceId: bob.device.id, messageIds: [first.id] },
+        device: bob.device, binding: JSON.stringify([first.id]), status: 204,
+      });
+      assert.equal((await request(bob, "/api/dms/unread")).unread, 1);
+      await respond(bob, enabled.path, "declined");
+
+      await setAlert("dm_message", true);
+      await setAlert("dm_invite", false);
+      const muted = await startRequest("dm_invites_off");
+      await muted.send();
+      assert.deepEqual(await flush(), []);
+      assert.deepEqual(await request(bob, "/api/dms/unread"), { unread: 0, requests: 1 });
+      assert.ok(!(await notifications(bob)).notifications.some((item) => item.conversationId === muted.id));
+      const { conversations } = await context(bob, "/api/dms/conversations");
+      assert.equal(conversations.find((entry) => entry.id === muted.id)?.unread, 1);
+
+      await respond(bob, muted.path, "declined");
+      await setAlert("dm_invite", true);
+      await pool.query("DELETE FROM push_subscriptions WHERE user_id = $1", [bob.id]);
+    });
+
     await t.test("message requests are capped, declining blocks both sides and only the blocker can lift it", async () => {
       const { id: requestId } = await open(carol, bob);
       const requestPath = "/api/dms/conversations/" + requestId;
       const send = (user, status = 204, ...recipients) => request(user, requestPath + "/messages", {
         method: "POST", body: user.device.message(requestId, recipients.length ? recipients : [carol.device, bob.device]), status,
       });
-      for (let count = 0; count < 3; count++) await send(carol);
+      for (let count = 0; count < 2; count++) await send(carol);
+      const third = carol.device.message(requestId, [carol.device, bob.device]);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await request(carol, requestPath + "/messages", { method: "POST", body: third, status: 204 });
+      }
       await send(carol, 409);
       await send(bob, 409);
       assert.equal((await context(carol, requestPath)).requestSent, 3);
@@ -247,6 +312,9 @@ test("DMs preserve legacy notifications and update live readers across API repli
         });
       }
       assert.equal(await unread(), 0);
+      assert.deepEqual(await event("conversation", (frame) => frame.read), {
+        type: "conversation", id, roster: false, read: true,
+      });
     });
 
     await t.test("people can react to, edit and delete messages", async () => {
@@ -356,19 +424,9 @@ test("DMs preserve legacy notifications and update live readers across API repli
     });
 
     await t.test("a message queues a push for the recipient that names the conversation, and read or deleted messages are never sent", async () => {
-      const subscribe = async () => {
-        const { rows: [session] } = await pool.query("SELECT token_hash FROM auth_sessions WHERE token_hash = $1", [(await import("../src/auth/secrets.ts")).hash(bob.token)]);
-        await pool.query("DELETE FROM push_subscriptions WHERE user_id = $1", [bob.id]);
-        await pool.query("INSERT INTO push_subscriptions (user_id, session_hash, endpoint, p256dh, auth) VALUES ($1, $2, $3, 'p', 'a')", [bob.id, session.token_hash, "https://push.invalid/" + randomUUID()]);
-      };
-      const flush = async () => {
-        const sent = [];
-        await flushPushDeliveries(async (_target, payload) => { sent.push(JSON.parse(payload)); });
-        return sent;
-      };
       const post = (user, body = user.device.message(id, [alice.device, bob.device])) =>
         request(user, path + "/messages", { method: "POST", body, status: 204 }).then(() => body);
-      await subscribe();
+      await subscribeBob();
       const first = await post(alice);
       const [push] = await flush();
       assert.equal(push.url, "/messages/" + id);
@@ -387,6 +445,22 @@ test("DMs preserve legacy notifications and update live readers across API repli
       const [hidden] = await flush();
       assert.equal(hidden.chatRecipient, undefined);
       await request(bob, "/api/notifications/previews", { method: "PATCH", body: { hideContent: false }, status: 204 });
+      const setMessageAlerts = (enabled) => request(bob, "/api/notifications/preferences", {
+        method: "PATCH", body: { kind: "dm_message", enabled },
+      });
+      await setMessageAlerts(false);
+      const muted = await post(alice);
+      assert.deepEqual(await flush(), []);
+      assert.equal((await request(bob, "/api/dms/unread")).unread, 0);
+      assert.ok(!(await notifications(bob)).notifications.some(({ kind }) => kind === "dm_message"));
+      await request(bob, path + "/read", {
+        method: "PUT", body: { deviceId: bob.device.id, messageIds: [muted.id] },
+        device: bob.device, binding: JSON.stringify([muted.id]), status: 204,
+      });
+      await setMessageAlerts(true);
+      assert.equal((await flush()).length, 0);
+      await post(alice);
+      assert.equal((await flush()).length, 1);
       await pool.query("UPDATE users SET dm_opted_out = true WHERE id = $1", [bob.id]);
       await post(alice, alice.device.message(id, [alice.device, bob.device])).catch(() => undefined);
       await pool.query("UPDATE users SET dm_opted_out = false WHERE id = $1", [bob.id]);

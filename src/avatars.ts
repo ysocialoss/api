@@ -1,19 +1,17 @@
 import {
-  stageMediaUpload,
   replaceProfileMedia,
   removeRecentAvatar,
   recentAvatarLimit,
 } from "./storage/media-lifecycle.ts";
-import { randomUUID } from "node:crypto";
-import express, { Router } from "express";
+import { Router } from "express";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { readViewerId, requireUser } from "./auth/request.ts";
 import { AuthError } from "./auth/provider.ts";
 import { db } from "./db/index.ts";
 import { avatarHistory, users } from "./db/schema.ts";
-import { avatarUploadLimit, normalizeAvatar } from "./storage/avatar-image.ts";
-import { getAvatar, requireAvatarStorage } from "./storage/r2.ts";
+import { stageAvatarUpload } from "./storage/profile-upload.ts";
+import { getAvatar } from "./storage/r2.ts";
 
 const router = Router();
 router.use((_req, res, next) => {
@@ -23,22 +21,9 @@ router.use((_req, res, next) => {
 router.put("/me", async (req, res) => {
   // Authenticate and check the origin before buffering any upload.
   const viewer = await requireUser(req);
-  requireAvatarStorage();
-  if (!req.is("image/png")) throw new AuthError(415, "avatar_png_required");
-  await new Promise<void>((resolve, reject) => {
-    express.raw({ type: "image/png", limit: avatarUploadLimit })(
-      req,
-      res,
-      (error) => (error ? reject(error) : resolve()),
-    );
-  });
-  if (!Buffer.isBuffer(req.body)) throw new AuthError(400, "invalid_avatar");
-  const image = await normalizeAvatar(req.body);
-  const key = `avatars/${randomUUID()}.avif`;
-  // Store first. Failed writes never replace the currently saved avatar.
-  await stageMediaUpload(key, image);
-  await replaceProfileMedia(viewer.id, { kind: "avatar", key });
-  res.json({ avatarUrl: `/api/${key}` });
+  const media = await stageAvatarUpload(req, res);
+  await replaceProfileMedia(viewer.id, media);
+  res.json({ avatarUrl: `/api/${media.key}` });
 });
 function avatarFile(value: unknown) {
   const file = z

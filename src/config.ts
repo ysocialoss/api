@@ -42,6 +42,8 @@ export const env = z
     DISCORD_CLIENT_SECRET: z.string().optional(),
     TWITCH_CLIENT_ID: z.string().optional(),
     TWITCH_CLIENT_SECRET: z.string().optional(),
+    STEAM_API_KEY: z.string().optional(),
+    DOMAIN_CONNECT_PRIVATE_KEY: z.string().optional(),
     SESSION_ENCRYPTION_KEY: z.preprocess(
       (value) => (value === "" ? undefined : value),
       z

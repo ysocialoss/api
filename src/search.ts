@@ -4,7 +4,7 @@ import { z } from "zod";
 import { db } from "./db/index.ts";
 import { postTopics, posts, userFollows, users } from "./db/schema.ts";
 import { AuthError } from "./auth/provider.ts";
-import { visiblePostAuthor } from "./post-data.ts";
+import { visiblePost } from "./post-data.ts";
 import { SEARCH_MAX_LENGTH, parseSearchQuery, type SearchQuery } from "./search-text.ts";
 import { userSelection } from "./user-data.ts";
 
@@ -97,7 +97,7 @@ async function findTopics(query: SearchQuery, limit: number, offset: number) {
     .select({ name: postTopics.topic, count: sql<number>`count(*)::int` })
     .from(postTopics)
     .innerJoin(posts, eq(posts.id, postTopics.postId))
-    .where(and(visiblePostAuthor, sql`strpos(${postTopics.topic}, ${name}) > 0`))
+    .where(and(visiblePost, sql`strpos(${postTopics.topic}, ${name}) > 0`))
     .groupBy(postTopics.topic)
     .orderBy(matchRank, desc(sql`count(*)`), postTopics.topic)
     .limit(limit)

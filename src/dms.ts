@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, exists, gt, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import express, { Router, type Request } from "express";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
@@ -38,6 +38,20 @@ const publicDevice = {
   revocation: dmDevices.revocation,
 };
 const certified = or(eq(dmDevices.root, true), isNotNull(dmDevices.approvedBy));
+const unreadMessageNotification = and(
+  isNull(notifications.readAt),
+  or(
+    eq(notifications.kind, "dm_message"),
+    and(
+      eq(notifications.kind, "dm_invite"),
+      // Older invites could be created without a message.
+      exists(db.select({ id: dmMessages.id }).from(dmMessages).where(and(
+        eq(dmMessages.conversationId, notifications.conversationId),
+        sql`${dmMessages.id}::text = ${notifications.subject}`,
+      ))),
+    ),
+  ),
+);
 const ownDevices = (userId: string) => eq(dmDevices.userId, userId);
 const currentDevices = sql`exists (
   select 1 from users where users.id = ${dmDevices.userId} and users.dm_generation = ${dmDevices.generation}
@@ -228,18 +242,23 @@ router.post("/devices/:id/:action", async (req, res) => {
 router.get("/conversations", async (req, res) => {
   const viewer = await requireApprovedUser(req);
   await requireDeviceAccess(req, viewer.id, parseInput(identifier, req.query.device));
+  const unreadByConversation = db.select({
+    id: notifications.conversationId,
+    count: sql<number>`count(*)::int`.as("unread_count"),
+  }).from(notifications).where(and(
+    eq(notifications.recipientId, viewer.id), unreadMessageNotification,
+  )).groupBy(notifications.conversationId).as("dm_unread");
   const conversations = await db.select({
     id: dmConversations.id, peer: userSelection, lastMessageAt: dmConversations.lastMessageAt, ...inviteFields,
-    unread: sql<number>`(
-      select count(*)::int from ${notifications}
-      where ${notifications.conversationId} = ${dmConversations.id} and ${notifications.kind} = 'dm_message'
-        and ${notifications.readAt} is null and ${notifications.recipientId} = ${viewer.id}
-    )`,
-    sent: sql<number>`(select count(*)::int from ${dmMessages} where ${dmMessages.conversationId} = ${dmConversations.id}
-      and ${dmMessages.senderId} = ${viewer.id} and ${dmMessages.deletedAt} is null)`,
+    unread: sql<number>`coalesce(${unreadByConversation.count}, 0)`,
+    requestSent: sql<number>`case when ${dmConversations.inviteStatus} = 'pending' and ${dmConversations.invitedBy} = ${viewer.id}
+      then (select count(*)::int from ${dmMessages} where ${dmMessages.conversationId} = ${dmConversations.id}
+        and ${dmMessages.senderId} = ${viewer.id} and ${dmMessages.deletedAt} is null)
+      else 0 end`,
   })
     .from(dmConversations)
     .innerJoin(users, eq(users.id, sql`case when ${dmConversations.firstUserId} = ${viewer.id} then ${dmConversations.secondUserId} else ${dmConversations.firstUserId} end`))
+    .leftJoin(unreadByConversation, eq(unreadByConversation.id, dmConversations.id))
     .where(and(member(viewer.id), sql`${hiddenFor(viewer.id)} is null`, or(
       and(eq(dmConversations.inviteStatus, "accepted"), isNotNull(dmConversations.lastMessageAt)),
       and(eq(dmConversations.inviteStatus, "accepted"), isNotNull(dmConversations.invitedBy)),
@@ -248,20 +267,20 @@ router.get("/conversations", async (req, res) => {
         inArray(dmConversations.inviteStatus, ["pending", "declined"])),
     )))
     .orderBy(sql`${dmConversations.lastMessageAt} desc nulls last`, desc(dmConversations.id));
-  res.json({ conversations: conversations.map(({ sent, ...conversation }) => ({
-    ...conversation, requestSent: conversation.invitedBy === viewer.id && conversation.inviteStatus === "pending" ? sent : 0,
-  })) });
+  res.json({ conversations });
 });
 
 router.get("/unread", async (req, res) => {
   const viewer = await requireApprovedUser(req);
   const [row] = await db.select({
-    unread: sql<number>`count(*) filter (where ${dmConversations.inviteStatus} <> 'declined')::int`,
+    unread: sql<number>`count(*) filter (where ${dmConversations.inviteStatus} <> 'declined'
+      and not (${notifications.kind}::text = any(${users.mutedNotificationKinds})))::int`,
     requests: sql<number>`count(distinct ${dmConversations.id}) filter (where ${dmConversations.inviteStatus} = 'pending')::int`,
   })
     .from(notifications)
     .innerJoin(dmConversations, eq(dmConversations.id, notifications.conversationId))
-    .where(and(eq(notifications.recipientId, viewer.id), eq(notifications.kind, "dm_message"), isNull(notifications.readAt)));
+    .innerJoin(users, eq(users.id, notifications.recipientId))
+    .where(and(eq(notifications.recipientId, viewer.id), unreadMessageNotification));
   res.json({ unread: row?.unread ?? 0, requests: row?.requests ?? 0 });
 });
 
@@ -308,16 +327,21 @@ router.post("/conversations", async (req, res) => {
 router.get("/conversations/:id", async (req, res) => {
   const { conversation, viewer } = await readContext(req);
   const ids = participants(conversation);
-  const members = await db.select(userSelection).from(users).where(inArray(users.id, ids));
-  const devices = await db.select(publicDevice).from(dmDevices).where(and(inArray(dmDevices.userId, ids), certified));
-  const [sent] = await db.select({ value: sql<number>`count(*)::int` }).from(dmMessages).where(and(
-    eq(dmMessages.conversationId, conversation.id), eq(dmMessages.senderId, conversation.invitedBy ?? viewer.id), isNull(dmMessages.deletedAt),
-  ));
-  const optedOut = await db.select({ id: users.id }).from(users).where(and(inArray(users.id, ids), eq(users.dmOptedOut, true)));
+  const [accounts, devices, [sent]] = await Promise.all([
+    db.select({ ...userSelection, optedOut: users.dmOptedOut }).from(users).where(inArray(users.id, ids)),
+    db.select(publicDevice).from(dmDevices).where(and(inArray(dmDevices.userId, ids), certified)),
+    conversation.inviteStatus === "pending"
+      ? db.select({ value: sql<number>`count(*)::int` }).from(dmMessages).where(and(
+        eq(dmMessages.conversationId, conversation.id), eq(dmMessages.senderId, conversation.invitedBy ?? viewer.id), isNull(dmMessages.deletedAt),
+      ))
+      : [],
+  ]);
   res.json({
-    members, devices, invitedBy: conversation.invitedBy, inviteStatus: conversation.inviteStatus,
-    selfOptedOut: optedOut.some(({ id }) => id === viewer.id), peerOptedOut: optedOut.some(({ id }) => id !== viewer.id),
-    requestSent: conversation.inviteStatus === "pending" ? sent?.value ?? 0 : 0,
+    members: accounts.map(({ optedOut: _optedOut, ...user }) => user),
+    devices, invitedBy: conversation.invitedBy, inviteStatus: conversation.inviteStatus,
+    selfOptedOut: accounts.some(({ id, optedOut }) => id === viewer.id && optedOut),
+    peerOptedOut: accounts.some(({ id, optedOut }) => id !== viewer.id && optedOut),
+    requestSent: sent?.value ?? 0,
   });
 });
 
@@ -409,19 +433,31 @@ function messageSelection(deviceId: string) {
 
 type Selected = { id: string; sequence: bigint };
 
+function byMessage<T extends { messageId: string }>(rows: T[]) {
+  const grouped = new Map<string, Omit<T, "messageId">[]>();
+  for (const { messageId, ...row } of rows) {
+    const entries = grouped.get(messageId);
+    if (entries) entries.push(row);
+    else grouped.set(messageId, [row]);
+  }
+  return grouped;
+}
+
 async function withReactions<T extends Selected>(messages: T[]) {
-  const reactions = messages.length
-    ? await db.select({ messageId: dmReactions.messageId, userId: dmReactions.userId, emoji: dmReactions.emoji })
-      .from(dmReactions).where(inArray(dmReactions.messageId, messages.map(({ id }) => id)))
-    : [];
-  const votes = messages.length
-    ? await db.select({ messageId: dmPollVotes.messageId, userId: dmPollVotes.userId, option: dmPollVotes.option })
-      .from(dmPollVotes).where(inArray(dmPollVotes.messageId, messages.map(({ id }) => id)))
-    : [];
+  if (!messages.length) return [];
+  const ids = messages.map(({ id }) => id);
+  const [reactions, votes] = await Promise.all([
+    db.select({ messageId: dmReactions.messageId, userId: dmReactions.userId, emoji: dmReactions.emoji })
+      .from(dmReactions).where(inArray(dmReactions.messageId, ids)),
+    db.select({ messageId: dmPollVotes.messageId, userId: dmPollVotes.userId, option: dmPollVotes.option })
+      .from(dmPollVotes).where(inArray(dmPollVotes.messageId, ids)),
+  ]);
+  const reactionsByMessage = byMessage(reactions);
+  const votesByMessage = byMessage(votes);
   return messages.map((message) => ({
     ...message, sequence: String(message.sequence),
-    reactions: reactions.filter(({ messageId }) => messageId === message.id).map(({ userId, emoji }) => ({ userId, emoji })),
-    votes: votes.filter(({ messageId }) => messageId === message.id).map(({ userId, option }) => ({ userId, option })),
+    reactions: reactionsByMessage.get(message.id) ?? [],
+    votes: votesByMessage.get(message.id) ?? [],
   }));
 }
 
@@ -504,10 +540,10 @@ router.put("/conversations/:id/read", async (req, res) => {
     requireActive(await readDevice(viewer.id, device.id, tx));
     const updated = await tx.update(notifications).set({ readAt: new Date() }).where(and(
       eq(notifications.recipientId, viewer.id), eq(notifications.conversationId, conversation.id),
-      eq(notifications.kind, "dm_message"), isNull(notifications.readAt),
+      inArray(notifications.kind, ["dm_message", "dm_invite"]), isNull(notifications.readAt),
       inArray(notifications.subject, delivered),
     )).returning({ id: notifications.id });
-    if (updated.length) await publishDmChange(tx, viewer.id, { type: "conversation", id: conversation.id, roster: false });
+    if (updated.length) await publishDmChange(tx, viewer.id, { type: "conversation", id: conversation.id, roster: false, read: true });
   });
   res.sendStatus(204);
 });
@@ -520,7 +556,19 @@ router.post("/conversations/:id/messages", async (req, res) => {
   const ids = participants(conversation);
 
   await db.transaction(async (tx) => {
-    requireAvailableAccounts(await lockAccounts(tx, ids), viewer.id);
+    const accounts = await lockAccounts(tx, ids);
+    const previous = await tx.query.dmMessages.findFirst({
+      columns: { conversationId: true, senderId: true, senderDeviceId: true },
+      where: eq(dmMessages.id, input.id),
+    });
+    if (previous?.conversationId === id && previous.senderId === viewer.id && previous.senderDeviceId === input.senderDeviceId) {
+      const sender = await readDevice(viewer.id, input.senderDeviceId, tx);
+      requireActive(sender);
+      if (!validSignature(sender.signingKey, messageProof(id, viewer.id, input), input.signature))
+        throw new AuthError(403, "invalid_dm_signature");
+      return;
+    }
+    requireAvailableAccounts(accounts, viewer.id);
     const current = await tx.query.dmConversations.findFirst({ where: eq(dmConversations.id, id) });
     if (current?.inviteStatus === "declined") throw new AuthError(403, "dm_blocked");
     const blocks = await blockState(tx, viewer.id, peerOf(conversation, viewer.id));
@@ -536,11 +584,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
     requireActive(sender);
     if (!validSignature(sender.signingKey, messageProof(id, viewer.id, input), input.signature))
       throw new AuthError(403, "invalid_dm_signature");
-    const previous = await tx.query.dmMessages.findFirst({ where: eq(dmMessages.id, input.id) });
-    if (previous) {
-      if (previous.conversationId === id && previous.senderId === viewer.id && previous.senderDeviceId === sender.id) return;
-      throw new AuthError(409, "dm_message_id_used");
-    }
+    if (previous) throw new AuthError(409, "dm_message_id_used");
     if (ids.some((userId) => !devices.some((device) => device.userId === userId)))
       throw new AuthError(409, "dm_recipient_not_enrolled");
     if (Object.keys(input.envelopes).length !== devices.length || devices.some((device) => !Object.hasOwn(input.envelopes, device.id)))
@@ -559,9 +603,11 @@ router.post("/conversations/:id/messages", async (req, res) => {
     }
     await tx.update(dmConversations).set({ lastMessageAt: now, firstHiddenAt: null, secondHiddenAt: null }).where(eq(dmConversations.id, id));
     const recipientId = peerOf(conversation, viewer.id);
+    const pendingInvite = current.inviteStatus === "pending";
     await recordNotification(tx, {
-      recipientId, actorId: viewer.id, kind: "dm_message", conversationId: id, subject: input.id,
-    });
+      recipientId, actorId: viewer.id, kind: pendingInvite ? "dm_invite" : "dm_message",
+      conversationId: id, subject: input.id,
+    }, { push: !pendingInvite || !current.lastMessageAt });
     for (const userId of ids) await publishDmChange(tx, userId, { type: "conversation", id, roster: false });
   });
   res.sendStatus(204);

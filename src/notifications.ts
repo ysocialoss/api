@@ -1,22 +1,23 @@
 import { Router } from "express";
-import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "./db/index.ts";
 import {
   notifications,
+  notificationKind,
   posts,
   pushDeliveries,
   pushSubscriptions,
   users,
 } from "./db/schema.ts";
-import { cookie, readViewerId, requireUser } from "./auth/request.ts";
+import { cookie, readViewerId, requireApprovedUser, requireUser } from "./auth/request.ts";
 import { hash } from "./auth/secrets.ts";
 import { AuthError } from "./auth/provider.ts";
 import { env } from "./config.ts";
 import { endpointSchema, subscriptionSchema } from "./push-config.ts";
 import { userSelection } from "./user-data.ts";
 import { notificationPreview } from "./notification-content.ts";
-import { visiblePostAuthor } from "./post-data.ts";
+import { visiblePost } from "./post-data.ts";
 import { notBlockedSql } from "./blocks.ts";
 import { publishDmChange } from "./dm-events.ts";
 
@@ -26,6 +27,35 @@ router.use((_req, res, next) => {
   next();
 });
 const cursorSchema = z.object({ createdAt: z.iso.datetime(), id: z.uuid() });
+const preferenceSchema = z.enum(notificationKind.enumValues);
+
+router.get("/preferences", async (req, res) => {
+  const user = await requireApprovedUser(req);
+  const [preferences] = await db.select({ mutedKinds: users.mutedNotificationKinds })
+    .from(users).where(eq(users.id, user.id));
+  res.json(preferences);
+});
+
+router.patch("/preferences", async (req, res) => {
+  const user = await requireUser(req);
+  const input = z.strictObject({ kind: preferenceSchema, enabled: z.boolean() }).safeParse(req.body);
+  if (!input.success) throw new AuthError(400, "invalid_notification_preference");
+  const { kind, enabled } = input.data;
+  const preferences = await db.transaction(async (tx) => {
+    const [saved] = await tx.update(users).set({
+      mutedNotificationKinds: enabled
+        ? sql`array_remove(${users.mutedNotificationKinds}, ${kind}::text)`
+        : sql`case when ${kind}::text = any(${users.mutedNotificationKinds})
+            then ${users.mutedNotificationKinds}
+            else array_append(${users.mutedNotificationKinds}, ${kind}::text) end`,
+    }).where(eq(users.id, user.id)).returning({ mutedKinds: users.mutedNotificationKinds });
+    if (kind === "dm_message" || kind === "dm_invite")
+      await publishDmChange(tx, user.id, { type: "notifications" });
+    return saved;
+  });
+  res.json(preferences);
+});
+
 router.get("/", async (req, res) => {
   const userId = await readViewerId(req);
   if (!userId) throw new AuthError(401, "sign_in_required");
@@ -48,11 +78,18 @@ router.get("/", async (req, res) => {
   if (!unreadQuery.success)
     throw new AuthError(400, "invalid_notification_query");
   const unread = unreadQuery.data === "true";
-  // Older clients validate a closed set of kinds and cannot display conversations.
-  const visibleKind = req.query.includeDms === "true" ? undefined : isNull(notifications.conversationId);
-  const [preferences] = await db.select({ hideContent: users.hideNotificationContent }).from(users)
+  const [preferences] = await db.select({
+    hideContent: users.hideNotificationContent,
+    mutedKinds: users.mutedNotificationKinds,
+  }).from(users)
     .where(eq(users.id, userId));
   const hideContent = preferences?.hideContent ?? true;
+  const mutedDmKinds = preferences?.mutedKinds.filter((kind) => kind === "dm_message" || kind === "dm_invite") ?? [];
+  const visibleKind = req.query.includeDms === "true"
+    ? mutedDmKinds.length ? notInArray(notifications.kind, mutedDmKinds) : undefined
+    : isNull(notifications.conversationId);
+  // Older clients validate a closed set of social notification kinds.
+  const extendedKinds = req.query.extendedKinds === "true";
   const rows = await db
     .select({
       id: notifications.id,
@@ -70,7 +107,7 @@ router.get("/", async (req, res) => {
     })
     .from(notifications)
     .innerJoin(users, eq(users.id, notifications.actorId))
-    .leftJoin(posts, and(eq(posts.id, notifications.postId), visiblePostAuthor))
+    .leftJoin(posts, and(eq(posts.id, notifications.postId), visiblePost))
     .where(
       and(
         eq(notifications.recipientId, userId),
@@ -101,6 +138,7 @@ router.get("/", async (req, res) => {
   res.json({
     notifications: page.map(({ hasGif, hasVoice, ...row }) => ({
       ...row,
+      kind: extendedKinds ? row.kind : legacyKind(row.kind),
       preview: row.preview === null ? null : notificationPreview(row.preview, hasGif, hasVoice),
     })),
     unreadCount: count.value,
@@ -116,6 +154,11 @@ router.get("/", async (req, res) => {
         : null,
   });
 });
+function legacyKind(kind: (typeof notificationKind.enumValues)[number]) {
+  if (kind === "friends_repost") return "repost";
+  if (kind === "friend") return "follow";
+  return kind;
+}
 router.put("/read", async (req, res) => {
   const user = await requireUser(req);
   const input = z

@@ -12,7 +12,7 @@ import {
 } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "./db/index.ts";
-import { authIdentities, connections, githubConnections, posts, users, userFollows, userHandles } from "./db/schema.ts";
+import { authIdentities, connections, githubConnections, posts, profilePins, userDomains, users, userFollows, userHandles } from "./db/schema.ts";
 import { publishAccountChange } from "./live-events.ts";
 import { removeUser } from "./user-removal.ts";
 import { profileReposts } from "./feed-entries.ts";
@@ -259,6 +259,11 @@ router.get("/:handle", async (req, res) => {
     .from(connections)
     .where(eq(connections.userId, profile.id))
     .orderBy(connections.createdAt);
+  const linkedDomains = await db
+    .select({ domain: userDomains.domain })
+    .from(userDomains)
+    .where(and(eq(userDomains.userId, profile.id), isNotNull(userDomains.verifiedAt)))
+    .orderBy(userDomains.verifiedAt, userDomains.domain);
   const blocks = await blockState(db, viewerId, profile.id);
   if (blocks.blocking || blocks.blockedBy) {
     res.json({
@@ -267,7 +272,7 @@ router.get("/:handle", async (req, res) => {
     });
     return;
   }
-  const [relationships, recent, replies, { posts: reposts, repostedBy }] = await Promise.all([
+  const [relationships, recent, replies, { posts: reposts, repostedBy }, [pinned]] = await Promise.all([
     viewerId
       ? db
           .select({
@@ -292,17 +297,23 @@ router.get("/:handle", async (req, res) => {
       .select(postSelection(viewerId))
       .from(posts)
       .innerJoin(users, eq(users.id, posts.authorId))
-      .where(and(eq(posts.authorId, profile.id), isNull(posts.parentId)))
+      .where(and(eq(posts.authorId, profile.id), isNull(posts.parentId), isNull(posts.hiddenAt)))
       .orderBy(desc(posts.createdAt), desc(posts.id))
       .limit(20),
     db
       .select(postSelection(viewerId))
       .from(posts)
       .innerJoin(users, eq(users.id, posts.authorId))
-      .where(and(eq(posts.authorId, profile.id), isNotNull(posts.parentId)))
+      .where(and(eq(posts.authorId, profile.id), isNotNull(posts.parentId), isNull(posts.hiddenAt)))
       .orderBy(desc(posts.createdAt), desc(posts.id))
       .limit(20),
     profileReposts(profile, viewerId),
+    db
+      .select(postSelection(viewerId))
+      .from(profilePins)
+      .innerJoin(posts, eq(posts.id, profilePins.postId))
+      .innerJoin(users, eq(users.id, posts.authorId))
+      .where(and(eq(profilePins.userId, profile.id), isNull(posts.hiddenAt))),
   ]);
   const ancestry =
     replies.length === 0
@@ -335,12 +346,13 @@ router.get("/:handle", async (req, res) => {
           .select(postSelection(viewerId))
           .from(posts)
           .innerJoin(users, eq(users.id, posts.authorId))
-          .where(and(inArray(posts.id, ancestorIds), isNull(users.bannedAt)));
+          .where(and(inArray(posts.id, ancestorIds), isNull(users.bannedAt), isNull(posts.hiddenAt)));
   const ancestorsById = new Map(
     ancestors.map((post) => [post.id, serializePost(post)]),
   );
   res.json({
-    profile: { ...profile, connections: linkedConnections },
+    profile: { ...profile, connections: linkedConnections, domains: linkedDomains.map(({ domain }) => domain) },
+    pinnedPost: pinned ? serializePost(pinned) : null,
     blocking: false,
     blockedBy: false,
     isFollowing: relationships.some(
@@ -370,14 +382,25 @@ async function setFollow(req: Request, follow: boolean) {
   const handle = handleSchema.safeParse(req.params.handle);
   if (!handle.success) throw new AuthError(404, "profile_not_found");
   return db.transaction(async (tx) => {
-    // Serialize updates for this profile so retries return a consistent count.
     const [target] = await tx
       .select({ id: users.id })
       .from(users)
-      .where(eq(users.id, tx.select({ id: userHandles.userId }).from(userHandles).where(eq(userHandles.handle, handle.data))))
-      .for("no key update");
+      .where(eq(users.id, tx.select({ id: userHandles.userId }).from(userHandles).where(eq(userHandles.handle, handle.data))));
     if (!target) throw new AuthError(404, "profile_not_found");
     if (target.id === viewer.id) throw new AuthError(400, "cannot_follow_self");
+    // Follow backs can arrive concurrently. Lock both accounts in the same order.
+    await tx.select({ id: users.id }).from(users)
+      .where(inArray(users.id, [viewer.id, target.id])).orderBy(users.id).for("no key update");
+    const [followsViewer] = await tx
+      .select({ followerId: userFollows.followerId })
+      .from(userFollows)
+      .where(
+        and(
+          eq(userFollows.followerId, target.id),
+          eq(userFollows.followingId, viewer.id),
+        ),
+      )
+      .limit(1);
     if (follow) await requireNotBlocked(tx, viewer.id, target.id);
     if (follow) {
       const [inserted] = await tx
@@ -389,7 +412,7 @@ async function setFollow(req: Request, follow: boolean) {
         await recordNotification(tx, {
           recipientId: target.id,
           actorId: viewer.id,
-          kind: "follow",
+          kind: followsViewer ? "friend" : "follow",
           postId: null,
           subject: target.id,
         });
@@ -407,16 +430,6 @@ async function setFollow(req: Request, follow: boolean) {
       .select({ followerCount: sql<number>`count(*)::int` })
       .from(userFollows)
       .where(eq(userFollows.followingId, target.id));
-    const [followsViewer] = await tx
-      .select({ followerId: userFollows.followerId })
-      .from(userFollows)
-      .where(
-        and(
-          eq(userFollows.followerId, target.id),
-          eq(userFollows.followingId, viewer.id),
-        ),
-      )
-      .limit(1);
     return {
       isFollowing: follow,
       isFollowedBy: !!followsViewer,

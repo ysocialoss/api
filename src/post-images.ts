@@ -1,13 +1,13 @@
 import express, { type Response } from "express";
 import { randomUUID } from "node:crypto";
-import { and, count, eq, gt, isNotNull, isNull, lte } from "drizzle-orm";
+import { and, count, eq, gt, isNull, lte } from "drizzle-orm";
 import sharp from "sharp";
 import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
 import { requireUser, readViewerId } from "./auth/request.ts";
 import { env } from "./config.ts";
 import { db } from "./db/index.ts";
-import { mediaDeletions, postImageFlags, postImages, users } from "./db/schema.ts";
+import { mediaDeletions, postImageFlags, postImages, posts, users } from "./db/schema.ts";
 import { stageMediaUpload } from "./storage/media-lifecycle.ts";
 import { avatarStorage } from "./storage/r2.ts";
 
@@ -120,29 +120,42 @@ router.use((_req, res, next) => {
   next();
 });
 const draft = isNull(postImages.postId);
-const uploadBody = express.raw({ type: "application/octet-stream", limit: maxUploadBytes, inflate: false });
-router.post("/", async (req, res, next) => {
-  res.locals.uploaderId = (await requireUser(req)).id;
-  next();
-}, uploadBody, async (req, res) => {
-  const uploaderId: string = res.locals.uploaderId;
-  if (!Buffer.isBuffer(req.body) || !req.body.length)
+export const postImageUploadBody = express.raw({ type: "application/octet-stream", limit: maxUploadBytes, inflate: false });
+
+export async function processPostImage<T>(
+  { body, uploaderId, filename }: { body: unknown; uploaderId: string; filename: string | undefined },
+  save: (data: Buffer) => Promise<T>,
+): Promise<T> {
+  if (!Buffer.isBuffer(body) || !body.length)
     throw new AuthError(400, "invalid_post_image");
   if (processing >= 4) throw new AuthError(429, "post_image_busy");
   processing++;
   try {
-    const data = await normalizeImage(req.body);
+    const data = await normalizeImage(body);
     const verdict = await checkImage(data);
     if (verdict.is_nsfw) {
       await recordFlag({
         uploaderId,
-        filename: uploadFilename(req.get("x-post-image-name")),
+        filename: uploadFilename(filename),
         confidence: verdict.confidence_percentage,
         data,
       });
       throw new AuthError(422, "post_image_rejected");
     }
-    const id = await db.transaction(async (tx) => {
+    return await save(data);
+  } finally {
+    processing--;
+  }
+}
+
+router.post("/", async (req, res, next) => {
+  res.locals.uploaderId = (await requireUser(req)).id;
+  next();
+}, postImageUploadBody, async (req, res) => {
+  const uploaderId: string = res.locals.uploaderId;
+  const id = await processPostImage(
+    { body: req.body, uploaderId, filename: req.get("x-post-image-name") },
+    (data) => db.transaction(async (tx) => {
       const [uploader] = await tx.select({ approvedAt: users.approvedAt, bannedAt: users.bannedAt })
         .from(users).where(eq(users.id, uploaderId)).for("update");
       if (!uploader?.approvedAt || uploader.bannedAt) throw new AuthError(403, "post_image_upload_forbidden");
@@ -154,11 +167,9 @@ router.post("/", async (req, res, next) => {
         .values({ uploaderId, data, expiresAt: new Date(now.getTime() + draftLifetimeMs) })
         .returning({ id: postImages.id });
       return saved.id;
-    });
-    res.status(201).json({ id });
-  } finally {
-    processing--;
-  }
+    }),
+  );
+  res.status(201).json({ id });
 });
 
 router.get("/:id", async (req, res) => {
@@ -166,7 +177,8 @@ router.get("/:id", async (req, res) => {
   if (!id.success) throw new AuthError(404, "post_image_not_found");
   const [published] = await db.select({ data: postImages.data }).from(postImages)
     .innerJoin(users, eq(users.id, postImages.uploaderId))
-    .where(and(eq(postImages.id, id.data), isNotNull(postImages.postId), isNull(users.bannedAt)));
+    .innerJoin(posts, eq(posts.id, postImages.postId))
+    .where(and(eq(postImages.id, id.data), isNull(users.bannedAt), isNull(posts.hiddenAt)));
   if (published) return sendPostImage(res, published.data);
 
   const viewerId = await readViewerId(req);

@@ -2,19 +2,21 @@ import { Router } from "express";
 import { and, asc, count, desc, eq, gt, gte, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
-import { requireAdminWrite, requireStaff } from "./admin-access.ts";
+import { requireAdminWrite, requireStaff, requireStaffWrite } from "./admin-access.ts";
 import adminReports, { openReportCount } from "./admin-reports.ts";
 import { db } from "./db/index.ts";
 import { authIdentities, githubConnections, moderationActivity, pollVotes, postImageFlags, postImages, posts, userRole, users } from "./db/schema.ts";
 import { githubProfileSelection, publicProfileSelection, userSelection } from "./user-data.ts";
-import { clearProfileMedia, flushMediaDeletions, queueDeletion } from "./storage/media-lifecycle.ts";
+import { clearProfileMedia, flushMediaDeletions, queueDeletion, replaceProfileMedia } from "./storage/media-lifecycle.ts";
 import { affectedPostIds, publishAccountChange, publishLiveChange, publishWaitlistChange } from "./live-events.ts";
 import { serveLiveStream } from "./live.ts";
 import { removePost } from "./post-removal.ts";
+import { editPost, postContentSchema } from "./post-edit.ts";
 import { publishUserPostVisibility, removeUser } from "./user-removal.ts";
 import { badgeDetails, badgeIcons, badgePresets } from "./profile-badges.ts";
 import { pronounsSchema } from "./pronouns.ts";
-import { imageFlagCutoff, sendPostImage } from "./post-images.ts";
+import { imageFlagCutoff, maxPostImages, postImageUploadBody, processPostImage, sendPostImage } from "./post-images.ts";
+import { stageAvatarUpload, stageBannerUpload } from "./storage/profile-upload.ts";
 import { getAvatar } from "./storage/r2.ts";
 import { randomUUID } from "node:crypto";
 
@@ -62,6 +64,7 @@ const postFields = {
   imageIds: posts.imageIds,
   voiceUrl: sql<string | null>`${posts.voice}->>'url'`,
   hasPoll: sql<boolean>`${posts.poll} is not null`,
+  hiddenAt: posts.hiddenAt,
   kind: sql<"Post" | "Reply">`case when ${posts.parentId} is null then 'Post' else 'Reply' end`,
   time: posts.createdAt,
 };
@@ -138,7 +141,7 @@ router.get("/post/:id", async (req, res) => {
   }).from(posts)
     .innerJoin(users, eq(posts.authorId, users.id)).where(eq(posts.id, id));
   if (!post) throw new AuthError(404, "post_not_found");
-  res.json({ ...formatPost(post), kind: "post", type: post.kind, canRemove: viewer.role === "admin" });
+  res.json({ ...formatPost(post), kind: "post", type: post.kind, canRemove: viewer.role === "admin", canSetVisibility: true });
 });
 
 const userListQuery = z.object({
@@ -257,7 +260,8 @@ router.get("/posts", async (req, res) => {
     ))
     .orderBy(...contentOrder[sort])
     .limit(pageSize + 1).offset((page - 1) * pageSize);
-  res.json({ posts: rows.slice(0, pageSize).map(formatPost), hasNextPage: rows.length > pageSize, canModerate: viewer.role === "admin" });
+  res.json({ posts: rows.slice(0, pageSize).map(formatPost), hasNextPage: rows.length > pageSize,
+    canModerate: viewer.role === "admin", canSetVisibility: true });
 });
 
 router.get("/users", async (req, res) => {
@@ -369,6 +373,56 @@ router.post("/waitlist/:id/approve", async (req, res) => {
   res.sendStatus(204);
 });
 
+router.patch("/posts/:id", async (req, res) => {
+  const viewer = await requireAdminWrite(req);
+  const id = z.uuid().safeParse(req.params.id);
+  if (!id.success) throw new AuthError(404, "post_not_found");
+  const input = postContentSchema.safeParse(req.body);
+  if (!input.success) throw new AuthError(400, "invalid_content");
+
+  await db.transaction(async (tx) => {
+    const [actor] = await tx.select({ role: users.role, handle: users.handle, bannedAt: users.bannedAt })
+      .from(users).where(eq(users.id, viewer.id)).for("share");
+    if (actor?.role !== "admin" || actor.bannedAt) throw new AuthError(403, "admin_required");
+    const { authorId, changed } = await editPost(tx, { id: id.data, content: input.data.content, editor: { kind: "admin" } });
+    if (!changed) return;
+    const [author] = await tx.select({ handle: users.handle }).from(users).where(eq(users.id, authorId));
+    await tx.insert(moderationActivity).values({
+      actorId: viewer.id, actorHandle: actor.handle, targetId: id.data,
+      targetHandle: author?.handle ?? "", action: "editPostText",
+    });
+  });
+  res.sendStatus(204);
+});
+
+router.patch("/posts/:id/visibility", async (req, res) => {
+  const viewer = await requireStaffWrite(req);
+  const id = z.uuid().safeParse(req.params.id);
+  if (!id.success) throw new AuthError(404, "post_not_found");
+  const input = z.strictObject({ hidden: z.boolean() }).safeParse(req.body);
+  if (!input.success) throw new AuthError(400, "invalid_post_visibility");
+  const { hidden } = input.data;
+
+  await db.transaction(async (tx) => {
+    const [actor] = await tx.select({ role: users.role, handle: users.handle, bannedAt: users.bannedAt, approvedAt: users.approvedAt })
+      .from(users).where(eq(users.id, viewer.id)).for("share");
+    if (!actor?.approvedAt || actor.bannedAt || (actor.role !== "admin" && actor.role !== "moderator"))
+      throw new AuthError(403, "staff_required");
+    const [post] = await tx.select({ hiddenAt: posts.hiddenAt, authorId: posts.authorId })
+      .from(posts).where(eq(posts.id, id.data)).for("update");
+    if (!post) throw new AuthError(404, "post_not_found");
+    if (Boolean(post.hiddenAt) === hidden) return;
+    await tx.update(posts).set({ hiddenAt: hidden ? new Date() : null }).where(eq(posts.id, id.data));
+    const [author] = await tx.select({ handle: users.handle }).from(users).where(eq(users.id, post.authorId));
+    await tx.insert(moderationActivity).values({
+      actorId: viewer.id, actorHandle: actor.handle, targetId: id.data,
+      targetHandle: author?.handle ?? "", action: hidden ? "hidePost" : "unhidePost",
+    });
+    await publishLiveChange(tx, await affectedPostIds(tx, id.data));
+  });
+  res.sendStatus(204);
+});
+
 router.delete("/posts/:id", async (req, res) => {
   const viewer = await requireAdminWrite(req);
   const id = z.uuid().safeParse(req.params.id);
@@ -392,12 +446,63 @@ router.delete("/posts/:id", async (req, res) => {
   res.sendStatus(204);
 });
 
-router.delete("/posts/:id/attachments/:kind", async (req, res) => {
+const postImageId = z.uuid().transform((id) => id.toLowerCase());
+const postImageChange = z.object({ id: z.uuid(), imageId: postImageId.optional() });
+
+// Omitting the image ID appends an image. Supplying it replaces that attachment.
+router.post("/posts/:id/attachments/images{/:imageId}", async (req, res, next) => {
+  res.locals.uploaderId = (await requireAdminWrite(req)).id;
+  next();
+}, postImageUploadBody, async (req, res) => {
+  const input = postImageChange.safeParse(req.params);
+  if (!input.success) throw new AuthError(404, "attachment_not_found");
+  const { id, imageId } = input.data;
+  const uploaderId: string = res.locals.uploaderId;
+  await processPostImage(
+    { body: req.body, uploaderId, filename: req.get("x-post-image-name") },
+    (data) => db.transaction(async (tx) => {
+      const [target] = await tx.select({ authorId: posts.authorId }).from(posts).where(eq(posts.id, id));
+      if (!target) throw new AuthError(404, "post_not_found");
+      // Lock users before the post, as account removal locks users before cascading to posts.
+      const locked = await tx.select({ id: users.id, role: users.role, handle: users.handle, bannedAt: users.bannedAt })
+        .from(users).where(inArray(users.id, [uploaderId, target.authorId])).orderBy(users.id).for("share");
+      const actor = locked.find((user) => user.id === uploaderId);
+      if (actor?.role !== "admin" || actor.bannedAt) throw new AuthError(403, "admin_required");
+      const [post] = await tx.select({ authorId: posts.authorId, imageIds: posts.imageIds })
+        .from(posts).where(and(eq(posts.id, id), eq(posts.authorId, target.authorId))).for("update");
+      if (!post) throw new AuthError(404, "post_not_found");
+      if (imageId && !post.imageIds.includes(imageId)) throw new AuthError(404, "attachment_not_found");
+      if (!imageId && post.imageIds.length >= maxPostImages) throw new AuthError(409, "post_image_limit");
+
+      // Published images follow the post author's visibility and account lifecycle.
+      const [saved] = await tx.insert(postImages)
+        .values({ postId: id, uploaderId: post.authorId, data, expiresAt: new Date() })
+        .returning({ id: postImages.id });
+      const imageIds = imageId
+        ? post.imageIds.map((current) => current === imageId ? saved.id : current)
+        : [...post.imageIds, saved.id];
+      await tx.update(posts).set({ imageIds }).where(eq(posts.id, id));
+      if (imageId) await tx.delete(postImages).where(and(eq(postImages.postId, id), eq(postImages.id, imageId)));
+      await tx.insert(moderationActivity).values({
+        actorId: uploaderId, actorHandle: actor.handle, targetId: id,
+        targetHandle: locked.find((user) => user.id === post.authorId)?.handle ?? "",
+        action: imageId ? "replaceImage" : "addImage",
+      });
+      await publishLiveChange(tx, await affectedPostIds(tx, id));
+    }),
+  );
+  res.sendStatus(204);
+});
+
+router.delete("/posts/:id/attachments/:kind{/:imageId}", async (req, res) => {
   const viewer = await requireAdminWrite(req);
   const id = z.uuid().safeParse(req.params.id);
   const kind = z.enum(["gif", "voice", "images", "all"]).safeParse(req.params.kind);
-  if (!id.success || !kind.success) throw new AuthError(404, "attachment_not_found");
+  const image = postImageId.optional().safeParse(req.params.imageId);
+  if (!id.success || !kind.success || !image.success || (image.data && kind.data !== "images"))
+    throw new AuthError(404, "attachment_not_found");
   const attachmentKind = kind.data;
+  const imageId = image.data;
 
   const voiceKey = await db.transaction(async (tx) => {
     const [actor] = await tx.select({ role: users.role, handle: users.handle, bannedAt: users.bannedAt }).from(users)
@@ -416,22 +521,24 @@ router.delete("/posts/:id/attachments/:kind", async (req, res) => {
     const removeGif = clearAll || attachmentKind === "gif";
     const removeVoice = clearAll || attachmentKind === "voice";
     const removeImages = clearAll || attachmentKind === "images";
+    const remainingImages = !removeImages ? post.imageIds : imageId ? post.imageIds.filter((id) => id !== imageId) : [];
     const hasAttachment = (removeGif && post.gif) || (removeVoice && post.voice) ||
-      (removeImages && post.imageIds.length > 0) || (clearAll && post.hasPoll);
+      remainingImages.length < post.imageIds.length || (clearAll && post.hasPoll);
     if (!hasAttachment) return;
     const keepsAttachment = (!clearAll && post.hasPoll) || (!removeGif && post.gif) ||
-      (!removeVoice && post.voice) || (!removeImages && post.imageIds.length > 0);
+      (!removeVoice && post.voice) || remainingImages.length > 0;
     if (!post.hasText && !keepsAttachment)
       throw new AuthError(409, "attachment_required");
 
     const fields = {
       gif: removeGif ? null : undefined,
       voice: removeVoice ? null : undefined,
-      imageIds: removeImages ? [] : undefined,
+      imageIds: removeImages ? remainingImages : undefined,
       poll: clearAll ? null : undefined,
     };
     await tx.update(posts).set(fields).where(eq(posts.id, id.data));
-    if (removeImages) await tx.delete(postImages).where(eq(postImages.postId, id.data));
+    if (removeImages) await tx.delete(postImages)
+      .where(and(eq(postImages.postId, id.data), imageId ? eq(postImages.id, imageId) : undefined));
     if (clearAll && post.hasPoll) await tx.delete(pollVotes).where(eq(pollVotes.postId, id.data));
     const key = removeVoice ? post.voice?.key : undefined;
     if (key) await queueDeletion(tx, key);
@@ -439,7 +546,8 @@ router.delete("/posts/:id/attachments/:kind", async (req, res) => {
     await tx.insert(moderationActivity).values({
       actorId: viewer.id, actorHandle: actor.handle, targetId: id.data,
       targetHandle: author?.handle ?? "",
-      action: { all: "clearAttachments", gif: "removeGif", voice: "removeVoice", images: "removeImages" }[attachmentKind],
+      action: imageId ? "removeImage" :
+        { all: "clearAttachments", gif: "removeGif", voice: "removeVoice", images: "removeImages" }[attachmentKind],
     });
     await publishLiveChange(tx, await affectedPostIds(tx, id.data));
     return key;
@@ -503,6 +611,19 @@ router.patch("/users/:id/profile", async (req, res) => {
     canEditRole: canModerateAccount(viewer, updated),
     canModerateAccount: canModerateAccount(viewer, updated),
   });
+});
+
+router.put("/users/:id/profile/:kind", async (req, res) => {
+  const viewer = await requireAdminWrite(req);
+  const id = z.uuid().safeParse(req.params.id);
+  if (!id.success) throw new AuthError(404, "user_not_found");
+  const { kind } = req.params;
+  if (kind !== "avatar" && kind !== "banner") throw new AuthError(404, "profile_media_not_found");
+  const media = kind === "avatar"
+    ? await stageAvatarUpload(req, res)
+    : await stageBannerUpload(req, res);
+  await replaceProfileMedia(id.data.toLowerCase(), media, viewer.id);
+  res.json({ url: `/api/${media.key}` });
 });
 
 const userIds = z.array(z.uuid()).min(1).max(pageSize);

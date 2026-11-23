@@ -44,7 +44,10 @@ async function getJson(url: string, headers: Record<string, string>) {
   }
 }
 
-const definitions: Record<ConnectionProvider, Definition> = {
+export type OAuthProvider = "discord" | "twitch";
+export type LinkProvider = "spotify" | "apple_music";
+
+const definitions: Record<OAuthProvider, Definition> = {
   discord: {
     clientId: env.DISCORD_CLIENT_ID,
     clientSecret: env.DISCORD_CLIENT_SECRET,
@@ -96,13 +99,39 @@ const definitions: Record<ConnectionProvider, Definition> = {
 export const isProvider = (value: string): value is ConnectionProvider =>
   (providerIds as readonly string[]).includes(value);
 
+export const isOAuthProvider = (provider: ConnectionProvider): provider is OAuthProvider =>
+  provider === "discord" || provider === "twitch";
+export const isLinkProvider = (provider: ConnectionProvider): provider is LinkProvider =>
+  provider === "spotify" || provider === "apple_music";
+
 export const providerConfigured = (provider: ConnectionProvider) =>
-  Boolean(definitions[provider].clientId && definitions[provider].clientSecret);
+  isOAuthProvider(provider)
+    ? Boolean(definitions[provider].clientId && definitions[provider].clientSecret)
+    : provider === "steam"
+      ? Boolean(env.STEAM_API_KEY)
+      : true;
 
 const redirectUri = (provider: ConnectionProvider) =>
   `${env.APP_ORIGIN}/api/connections/${provider}/callback`;
 
+const steamLogin = "https://steamcommunity.com/openid/login";
+const openIdNamespace = "http://specs.openid.net/auth/2.0";
+const steamReturnTo = (state: string) => `${redirectUri("steam")}?state=${encodeURIComponent(state)}`;
+
 export function providerAuthorizeUrl(provider: ConnectionProvider, state: string, verifier: string) {
+  if (provider === "steam") {
+    const url = new URL(steamLogin);
+    url.search = new URLSearchParams({
+      "openid.ns": openIdNamespace,
+      "openid.mode": "checkid_setup",
+      "openid.return_to": steamReturnTo(state),
+      "openid.realm": env.APP_ORIGIN,
+      "openid.identity": `${openIdNamespace}/identifier_select`,
+      "openid.claimed_id": `${openIdNamespace}/identifier_select`,
+    }).toString();
+    return url.href;
+  }
+  if (!isOAuthProvider(provider)) throw new AuthError(400, "invalid_connection");
   const definition = definitions[provider];
   const params: Record<string, string> = {
     response_type: "code",
@@ -126,6 +155,7 @@ export async function exchangeProviderCode(
   code: string,
   verifier: string,
 ): Promise<ProviderIdentity> {
+  if (!isOAuthProvider(provider)) throw new AuthError(400, "invalid_connection");
   const definition = definitions[provider];
   const body = new URLSearchParams({
     grant_type: "authorization_code",
@@ -153,4 +183,83 @@ export async function exchangeProviderCode(
   const identity = await definition.fetchIdentity(token, definition.clientId ?? "");
   if (new URL(identity.url).host !== definition.urlHost) throw new AuthError(502, "connection_unavailable");
   return identity;
+}
+
+export async function verifySteamLogin(
+  query: Record<string, unknown>,
+  state: string,
+): Promise<ProviderIdentity> {
+  const fields = Object.entries(query).filter(
+    (entry): entry is [string, string] => entry[0].startsWith("openid.") && typeof entry[1] === "string",
+  );
+  const get = (name: string) => fields.find(([key]) => key === `openid.${name}`)?.[1];
+  const steamId = /^https:\/\/steamcommunity\.com\/openid\/id\/(\d{17})$/.exec(get("claimed_id") ?? "")?.[1];
+  if (
+    get("ns") !== openIdNamespace ||
+    get("mode") !== "id_res" ||
+    get("op_endpoint") !== steamLogin ||
+    get("return_to") !== steamReturnTo(state) ||
+    get("identity") !== get("claimed_id") ||
+    !steamId
+  )
+    throw new AuthError(400, "connection_failed");
+  const body = new URLSearchParams(fields);
+  body.set("openid.mode", "check_authentication");
+  let valid: boolean;
+  try {
+    const response = await fetch(steamLogin, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+      redirect: "error",
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) throw new AuthError(502, "connection_unavailable");
+    valid = /^is_valid:true$/m.test(await response.text());
+  } catch (error) {
+    if (error instanceof AuthError) throw error;
+    throw new AuthError(502, "connection_unavailable");
+  }
+  if (!valid) throw new AuthError(400, "connection_failed");
+  const summary = z.object({
+    response: z.object({
+      players: z.array(z.object({ steamid: z.literal(steamId), personaname: text(100) })).min(1),
+    }),
+  }).parse(await getJson(
+    `https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?${new URLSearchParams({
+      key: env.STEAM_API_KEY ?? "",
+      steamids: steamId,
+    })}`,
+    {},
+  ));
+  const name = summary.response.players[0].personaname;
+  return {
+    id: steamId,
+    username: name,
+    displayName: name,
+    url: `https://steamcommunity.com/profiles/${steamId}`,
+  };
+}
+
+const linkHosts: Record<LinkProvider, { host: string; pattern: RegExp; canonical: (name: string) => string }> = {
+  spotify: {
+    host: "open.spotify.com",
+    pattern: /^(?:\/intl-[a-z]{2}(?:-[a-z]{2})?)?\/user\/([\w.-]{1,64})\/?$/i,
+    canonical: (name) => `https://open.spotify.com/user/${name}`,
+  },
+  apple_music: {
+    host: "music.apple.com",
+    pattern: /^(?:\/[a-z]{2})?\/profile\/([\w.-]{1,64})\/?$/i,
+    canonical: (name) => `https://music.apple.com/profile/${name}`,
+  },
+};
+
+export function parseProfileLink(provider: LinkProvider, raw: string): ProviderIdentity | null {
+  const { host, pattern, canonical } = linkHosts[provider];
+  const url = URL.parse(raw.trim().includes("://") ? raw.trim() : `https://${raw.trim()}`);
+  if (!url || url.protocol !== "https:" || url.hostname !== host || url.port || url.username || url.password)
+    return null;
+  const name = pattern.exec(url.pathname)?.[1];
+  if (!name) return null;
+  return { id: name, username: name, displayName: name, url: canonical(name) };
 }

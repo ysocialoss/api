@@ -1,6 +1,6 @@
-import { sql } from "drizzle-orm";
+import { and, isNull, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
-import { postLikes, postReposts, posts, users } from "./db/schema.ts";
+import { postLikes, postReposts, postSaves, posts, profilePins, users } from "./db/schema.ts";
 import { avatarUrlSelection, paintJson, type UserPaint, userSelection } from "./user-data.ts";
 import type { PollDefinition } from "./poll-schema.ts";
 
@@ -9,10 +9,10 @@ const previewPaint = paintJson(sql`u.paint_id`);
 
 type PostUser = { id: string; handle: string; displayName: string; avatarUrl: string | null; paint: UserPaint | null };
 
-export const visiblePostAuthor = sql`exists (
+export const visiblePost = and(isNull(posts.hiddenAt), sql`exists (
   select 1 from users visible_author
   where visible_author.id = ${posts.authorId} and visible_author.banned_at is null
-)`;
+)`);
 
 export const postFields = {
   id: posts.id,
@@ -33,6 +33,17 @@ export function reactionSelection(viewerId: string | null) {
         : sql<boolean>`exists(select 1 from ${postLikes} where ${postLikes.postId} = ${posts.id} and ${postLikes.userId} = ${viewerId})`,
   };
 }
+export function saveSelection(viewerId: string | null) {
+  return {
+    saved:
+      viewerId === null
+        ? sql<boolean>`false`
+        : sql<boolean>`exists(select 1 from ${postSaves} where ${postSaves.postId} = ${posts.id} and ${postSaves.userId} = ${viewerId})`,
+  };
+}
+export const pinnedSelection = {
+  pinned: sql<boolean>`exists(select 1 from ${profilePins} where ${profilePins.postId} = ${posts.id})`,
+};
 // "Friends" are mutual follows. True when the viewer and the user in `other`
 // follow each other.
 export const mutualFollowSql = (viewerId: string, other: ReturnType<typeof sql>) => sql`(
@@ -75,7 +86,7 @@ export type QuotedPost = {
 export type PostQuote = { state: "available"; post: QuotedPost } | { state: "unavailable" };
 export const quoteSelection = {
   quotes: sql<number>`(select count(*)::int from posts q join users u on u.id = q.author_id
-    where q.quoted_post_id = ${posts.id} and u.banned_at is null)`,
+    where q.quoted_post_id = ${posts.id} and q.hidden_at is null and u.banned_at is null)`,
   // The embedded post, one level deep. Null for posts that are not quotes.
   quote: sql<PostQuote | null>`case when ${posts.isQuote} then (
     coalesce((
@@ -88,14 +99,14 @@ export const quoteSelection = {
         'author', jsonb_build_object('id', u.id, 'handle', u.handle, 'displayName', u.display_name,
           'avatarUrl', ${previewAvatarUrl}, 'paint', ${previewPaint})
       ))
-      from posts q join users u on u.id = q.author_id where q.id = ${posts.quotedPostId} and u.banned_at is null
+      from posts q join users u on u.id = q.author_id where q.id = ${posts.quotedPostId} and q.hidden_at is null and u.banned_at is null
     ), jsonb_build_object('state', 'unavailable'))
   ) end`,
   // Who a reply answers, so a reply shown outside its thread still has context.
   replyTo: sql<{ id: string; handle: string; displayName: string; paint: UserPaint | null } | null>`(
     select jsonb_build_object('id', pp.id, 'handle', pu.handle, 'displayName', pu.display_name,
       'paint', ${paintJson(sql`pu.paint_id`)})
-    from posts pp join users pu on pu.id = pp.author_id where pp.id = ${posts.parentId}
+    from posts pp join users pu on pu.id = pp.author_id where pp.id = ${posts.parentId} and pp.hidden_at is null
   )`,
 };
 type PollResult = Omit<PollDefinition, "options"> & {
@@ -149,6 +160,8 @@ export function friendLikeSelection(viewerId: string | null) {
 }
 export const postSelection = (viewerId: string | null) => ({
   ...reactionSelection(viewerId),
+  ...saveSelection(viewerId),
+  ...pinnedSelection,
   ...friendLikeSelection(viewerId),
   ...repostSelection(viewerId),
   ...quoteSelection,
@@ -168,7 +181,7 @@ export const postSelection = (viewerId: string | null) => ({
       join descendants on reply.parent_id = descendants.id
     )
     select count(*)::int from descendants d join posts p on p.id = d.id
-    join users u on u.id = p.author_id where u.banned_at is null
+    join users u on u.id = p.author_id where u.banned_at is null and p.hidden_at is null
   )`,
   author: userSelection,
 });

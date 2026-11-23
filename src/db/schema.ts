@@ -3,6 +3,7 @@ import type { KlipyGif } from "../storage/klipy.ts";
 import type { PollDefinition } from "../poll-schema.ts";
 import type { ProfileBadge } from "../profile-badges.ts";
 import type { Voice } from "../storage/voice-selection.ts";
+import type { PaintDefinition } from "../paint-schema.ts";
 import { sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
@@ -23,36 +24,31 @@ import {
   timestamp,
   uuid,
 } from "drizzle-orm/pg-core";
-import type { PaintDefinition } from "../paint-schema.ts";
 
-export const userRole = pgEnum("user_role", [
-  "admin",
-  "moderator",
-  "og",
-  "user",
+export const userRole = pgEnum("user_role", ["admin", "moderator", "og", "user"]);
+
+export const notificationKind = pgEnum("notification_kind", [
+  "like",
+  "repost",
+  "reply",
+  "follow",
+  "mention",
+  "quote",
+  "dm_invite",
+  "dm_message",
+  "friends_repost",
+  "friend",
 ]);
-
-export const moderationActivity = pgTable(
-  "moderation_activity",
-  {
-    id: uuid().defaultRandom().primaryKey(),
-    actorId: uuid("actor_id").notNull(),
-    actorHandle: text("actor_handle").notNull(),
-    targetId: uuid("target_id").notNull(),
-    targetHandle: text("target_handle").notNull(),
-    action: text().notNull(),
-    detail: text(),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-  },
-  (table) => [
-    index("moderation_activity_created_idx").on(
-      table.createdAt.desc(),
-      table.id.desc(),
-    ),
-  ],
-);
+export const moderationActivity = pgTable("moderation_activity", {
+  id: uuid().defaultRandom().primaryKey(),
+  actorId: uuid("actor_id").notNull(),
+  actorHandle: text("actor_handle").notNull(),
+  targetId: uuid("target_id").notNull(),
+  targetHandle: text("target_handle").notNull(),
+  action: text().notNull(),
+  detail: text(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [index("moderation_activity_created_idx").on(table.createdAt.desc(), table.id.desc())]);
 
 export const users = pgTable(
   "users",
@@ -72,17 +68,15 @@ export const users = pgTable(
     dmGeneration: integer("dm_generation").notNull().default(1),
     dmOptedOut: boolean("dm_opted_out").notNull().default(false),
     hideNotificationContent: boolean("hide_notification_content").notNull().default(false),
+    mutedNotificationKinds: text("muted_notification_kinds").$type<(typeof notificationKind.enumValues)[number]>().array().notNull().default(sql`'{}'::text[]`),
+    navigation: text().array(),
     avatarKey: text("avatar_key"),
-    identityAvatarHidden: boolean("identity_avatar_hidden")
-      .notNull()
-      .default(false),
+    identityAvatarHidden: boolean("identity_avatar_hidden").notNull().default(false),
+    paintId: uuid("paint_id").references((): AnyPgColumn => paints.id, { onDelete: "set null" }),
     bannerKey: text("banner_key"),
     bannerCrop: jsonb("banner_crop").$type<BannerCrop>(),
     bannerExternalUrl: text("banner_external_url"),
     colour: text().notNull().default("#808080"),
-    paintId: uuid("paint_id").references((): AnyPgColumn => paints.id, {
-      onDelete: "set null",
-    }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -91,9 +85,7 @@ export const users = pgTable(
       .defaultNow(),
   },
   (table) => [
-    index("users_waitlist_idx")
-      .on(table.createdAt, table.id)
-      .where(sql`${table.approvedAt} is null`),
+    index("users_waitlist_idx").on(table.createdAt, table.id).where(sql`${table.approvedAt} is null`),
     check("users_handle_check", sql`${table.handle} ~ '^[a-z0-9_]{3,32}$'`),
     check(
       "users_display_name_check",
@@ -108,9 +100,7 @@ export const userHandles = pgTable(
   "user_handles",
   {
     handle: text().primaryKey(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   },
   (table) => [index("user_handles_user_idx").on(table.userId)],
 );
@@ -217,7 +207,7 @@ export const githubLinkAttempts = pgTable("github_link_attempts", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 });
 
-export const connectionProviders = ["discord", "twitch"] as const;
+export const connectionProviders = ["discord", "twitch", "steam", "spotify", "apple_music"] as const;
 
 export const connectionLinkAttempts = pgTable("connection_link_attempts", {
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
@@ -242,7 +232,21 @@ export const connections = pgTable("connections", {
 }, (table) => [
   unique("connections_user_provider_unique").on(table.userId, table.provider),
   unique("connections_provider_external_unique").on(table.provider, table.externalId),
-  check("connections_provider_check", sql`${table.provider} in ('discord', 'twitch')`),
+  check("connections_provider_check", sql`${table.provider} in ('discord', 'twitch', 'steam', 'spotify', 'apple_music')`),
+]);
+
+export const userDomains = pgTable("user_domains", {
+  id: uuid().defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  domain: text().notNull(),
+  token: text().notNull(),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  unique("user_domains_user_domain_unique").on(table.userId, table.domain),
+  uniqueIndex("user_domains_verified_domain_idx").on(table.domain).where(sql`${table.verifiedAt} is not null`),
+  index("user_domains_user_idx").on(table.userId),
+  check("user_domains_domain_check", sql`${table.domain} ~ '^[a-z0-9.-]{3,253}$'`),
 ]);
 
 export const githubConnections = pgTable("github_connections", {
@@ -315,12 +319,9 @@ export const posts = pgTable(
     }),
     // A quote is a top-level post that embeds another post. The embedded post
     // can later disappear (set null); isQuote tells that apart from "no quote".
-    quotedPostId: uuid("quoted_post_id").references(
-      (): AnyPgColumn => posts.id,
-      {
-        onDelete: "set null",
-      },
-    ),
+    quotedPostId: uuid("quoted_post_id").references((): AnyPgColumn => posts.id, {
+      onDelete: "set null",
+    }),
     isQuote: boolean("is_quote").notNull().default(false),
     content: text().notNull(),
     gif: jsonb().$type<KlipyGif>(),
@@ -332,11 +333,10 @@ export const posts = pgTable(
       .defaultNow(),
     editedAt: timestamp("edited_at", { withTimezone: true, precision: 3 }),
     flaggedAt: timestamp("flagged_at", { withTimezone: true, precision: 3 }),
+    hiddenAt: timestamp("hidden_at", { withTimezone: true, precision: 3 }),
   },
   (table) => [
-    index("posts_quoted_idx")
-      .on(table.quotedPostId)
-      .where(sql`${table.quotedPostId} IS NOT NULL`),
+    index("posts_quoted_idx").on(table.quotedPostId).where(sql`${table.quotedPostId} IS NOT NULL`),
     check(
       "posts_quote_check",
       sql`(${table.isQuote} OR ${table.quotedPostId} IS NULL) AND (NOT ${table.isQuote} OR ${table.parentId} IS NULL)`,
@@ -347,10 +347,7 @@ export const posts = pgTable(
       table.id.desc(),
     ),
     index("posts_feed_idx").on(table.createdAt.desc(), table.id.desc()),
-    index("posts_content_search_idx").using(
-      "gin",
-      sql`to_tsvector('simple', ${table.content})`,
-    ),
+    index("posts_content_search_idx").using("gin", sql`to_tsvector('simple', ${table.content})`),
     check(
       "posts_content_check",
       sql`char_length(${table.content}) <= 2000 AND (${table.content} ~ '[^[:space:]]' OR (${table.content} = '' AND (${table.gif} IS NOT NULL OR ${table.poll} IS NOT NULL OR ${table.voice} IS NOT NULL OR cardinality(${table.imageIds}) > 0)))`,
@@ -397,11 +394,7 @@ export const pollVotes = pgTable(
   },
   (table) => [
     primaryKey({ columns: [table.postId, table.userId] }),
-    index("poll_votes_option_idx").on(
-      table.postId,
-      table.optionIndex,
-      table.userId,
-    ),
+    index("poll_votes_option_idx").on(table.postId, table.optionIndex, table.userId),
     index("poll_votes_user_idx").on(table.userId),
   ],
 );
@@ -436,14 +429,9 @@ export const postEdits = pgTable(
       .references(() => posts.id, { onDelete: "cascade" }),
     content: text().notNull(),
     // When this version was written: the post's creation or its previous edit.
-    versionAt: timestamp("version_at", {
-      withTimezone: true,
-      precision: 3,
-    }).notNull(),
+    versionAt: timestamp("version_at", { withTimezone: true, precision: 3 }).notNull(),
   },
-  (table) => [
-    index("post_edits_post_idx").on(table.postId, table.versionAt.desc()),
-  ],
+  (table) => [index("post_edits_post_idx").on(table.postId, table.versionAt.desc())],
 );
 
 export const postLikes = pgTable(
@@ -461,6 +449,29 @@ export const postLikes = pgTable(
     index("post_likes_user_idx").on(table.userId),
   ],
 );
+
+export const postSaves = pgTable(
+  "post_saves",
+  {
+    postId: uuid("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.postId, table.userId] }),
+    index("post_saves_user_idx").on(table.userId, table.createdAt.desc(), table.postId.desc()),
+  ],
+);
+
+export const profilePins = pgTable("profile_pins", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  postId: uuid("post_id").notNull().references(() => posts.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const postReposts = pgTable(
   "post_reposts",
@@ -534,32 +545,21 @@ export const voiceJobs = pgTable(
   "voice_jobs",
   {
     id: uuid().notNull(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     input: bytea(),
     voice: jsonb().$type<Voice>(),
     error: text(),
     lease: uuid(),
     attempts: integer().notNull().default(0),
-    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.userId, table.id] }),
-    uniqueIndex("voice_jobs_user_pending_idx")
-      .on(table.userId)
-      .where(sql`${table.input} IS NOT NULL`),
-    index("voice_jobs_due_idx")
-      .on(table.nextAttemptAt)
-      .where(sql`${table.input} IS NOT NULL`),
+    uniqueIndex("voice_jobs_user_pending_idx").on(table.userId).where(sql`${table.input} IS NOT NULL`),
+    index("voice_jobs_due_idx").on(table.nextAttemptAt).where(sql`${table.input} IS NOT NULL`),
     index("voice_jobs_expiry_idx").on(table.expiresAt),
-    check(
-      "voice_jobs_one_state",
-      sql`num_nonnulls(${table.input}, ${table.voice}, ${table.error}) = 1`,
-    ),
+    check("voice_jobs_one_state", sql`num_nonnulls(${table.input}, ${table.voice}, ${table.error}) = 1`),
   ],
 );
 
@@ -577,32 +577,12 @@ export const avatarHistory = pgTable(
   ],
 );
 
-export const postMentions = pgTable(
-  "post_mentions",
-  {
-    postId: uuid("post_id")
-      .notNull()
-      .references(() => posts.id, { onDelete: "cascade" }),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    handle: text().notNull(),
-  },
-  (table) => [
-    primaryKey({ columns: [table.postId, table.userId, table.handle] }),
-  ],
-);
+export const postMentions = pgTable("post_mentions", {
+  postId: uuid("post_id").notNull().references(() => posts.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  handle: text().notNull(),
+}, (table) => [primaryKey({ columns: [table.postId, table.userId, table.handle] })]);
 
-export const notificationKind = pgEnum("notification_kind", [
-  "like",
-  "repost",
-  "reply",
-  "follow",
-  "mention",
-  "quote",
-  "dm_invite",
-  "dm_message",
-]);
 export const notifications = pgTable(
   "notifications",
   {
@@ -647,7 +627,7 @@ export const notifications = pgTable(
       "notifications_subject_check",
       sql`case
         when ${table.kind}::text in ('dm_invite', 'dm_message') then ${table.conversationId} is not null and ${table.postId} is null
-        when ${table.kind} = 'follow' then ${table.conversationId} is null and ${table.postId} is null
+        when ${table.kind}::text in ('follow', 'friend') then ${table.conversationId} is null and ${table.postId} is null
         else ${table.conversationId} is null and ${table.postId} is not null
       end`,
     ),
@@ -779,26 +759,11 @@ export const paints = pgTable("paints", {
   definition: jsonb().$type<PaintDefinition>().notNull(),
   isFree: boolean("is_free").notNull().default(false),
   sortOrder: integer("sort_order").notNull().default(0),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const userPaints = pgTable(
-  "user_paints",
-  {
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    paintId: uuid("paint_id")
-      .notNull()
-      .references(() => paints.id, { onDelete: "cascade" }),
-    grantedAt: timestamp("granted_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-  },
-  (table) => [
-    primaryKey({ columns: [table.userId, table.paintId] }),
-    index("user_paints_paint_idx").on(table.paintId),
-  ],
-);
+export const userPaints = pgTable("user_paints", {
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  paintId: uuid("paint_id").notNull().references(() => paints.id, { onDelete: "cascade" }),
+  grantedAt: timestamp("granted_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [primaryKey({ columns: [table.userId, table.paintId] }), index("user_paints_paint_idx").on(table.paintId)]);

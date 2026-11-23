@@ -1,0 +1,1 @@
+ALTER TABLE "users" RENAME COLUMN "desktop_navigation" TO "navigation";

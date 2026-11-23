@@ -47,6 +47,12 @@ const reportFields = {
   openOnTarget: targetReportCount,
 };
 
+function canRemoveReportedContent(viewer: Pick<typeof users.$inferSelect, "id" | "role">,
+  report: Pick<typeof reports.$inferSelect, "targetType" | "reporterId" | "status">) {
+  return report.status === "open" && (viewer.role === "admin" ? report.targetType !== "user"
+    : report.targetType === "post" && report.reporterId !== null && report.reporterId !== viewer.id);
+}
+
 const listQuery = z.object({
   status: z.enum(["open", "resolved", "dismissed", "all"]).default("open"),
   type: z.enum(["all", "post", "user", "message"]).default("all"),
@@ -136,6 +142,7 @@ router.get("/:id", async (req, res) => {
     target: state,
     canResolve: true,
     canAct: viewer.role === "admin",
+    canRemoveContent: state.exists && canRemoveReportedContent(viewer, report),
     canBan: viewer.role === "admin" && Boolean(state.owner) && state.owner?.id !== viewer.id && !state.owner?.bannedAt,
   });
 });
@@ -156,14 +163,19 @@ router.post("/:id/resolve", async (req, res) => {
   const input = resolution.safeParse(req.body);
   if (!input.success) throw new AuthError(400, "invalid_report_resolution");
   const change = input.data;
-  const acting = change.removeContent || change.clearProfile.length > 0 || Boolean(change.ban);
-  if (change.decision === "dismiss" && acting) throw new AuthError(400, "invalid_report_resolution");
-  if (acting && viewer.role !== "admin") throw new AuthError(403, "admin_required");
+  const accountAction = change.clearProfile.length > 0 || Boolean(change.ban);
+  if (change.decision === "dismiss" && (change.removeContent || accountAction)) throw new AuthError(400, "invalid_report_resolution");
+  if (accountAction && viewer.role !== "admin") throw new AuthError(403, "admin_required");
 
   const mediaKeys = await db.transaction(async (tx) => {
-    const [report] = await tx.select().from(reports).where(eq(reports.id, id.data)).for("update");
-    if (!report) throw new AuthError(404, "report_not_found");
-    if (report.status !== "open") throw new AuthError(409, "report_closed");
+    const [selected] = await tx.select({ id: reports.id, targetType: reports.targetType, targetKey: reports.targetKey })
+      .from(reports).where(eq(reports.id, id.data));
+    if (!selected) throw new AuthError(404, "report_not_found");
+    const openTarget = and(eq(reports.targetType, selected.targetType), eq(reports.targetKey, selected.targetKey), eq(reports.status, "open"));
+    // Resolution closes every open report for the target. Lock them in the same order for every selected report.
+    const openReports = await tx.select().from(reports).where(openTarget).orderBy(reports.id).for("update");
+    const report = openReports.find((row) => row.id === selected.id);
+    if (!report) throw new AuthError(409, "report_closed");
     if (change.clearProfile.length && report.targetType !== "user") throw new AuthError(400, "invalid_report_resolution");
     if (change.removeContent && report.targetType === "user") throw new AuthError(400, "invalid_report_resolution");
 
@@ -173,9 +185,11 @@ router.post("/:id/resolve", async (req, res) => {
       avatarKey: users.avatarKey, bannerKey: users.bannerKey,
     }).from(users).where(inArray(users.id, lockIds)).orderBy(users.id).for("update");
     const actor = locked.find((user) => user.id === viewer.id);
-    if (!actor || actor.bannedAt || (actor.role !== "admin" && actor.role !== "moderator"))
+    if (!actor?.approvedAt || actor.bannedAt || (actor.role !== "admin" && actor.role !== "moderator"))
       throw new AuthError(403, "staff_required");
-    if (acting && actor.role !== "admin") throw new AuthError(403, "admin_required");
+    if (accountAction && actor.role !== "admin") throw new AuthError(403, "admin_required");
+    if (change.removeContent && !canRemoveReportedContent(actor, report))
+      throw new AuthError(403, report.targetType === "post" ? "independent_post_report_required" : "admin_required");
     const owner = locked.find((user) => user.id === report.targetUserId);
 
     const actions: string[] = [];
@@ -185,7 +199,7 @@ router.post("/:id/resolve", async (req, res) => {
     });
 
     if (change.removeContent && report.targetType === "post") {
-      const removed = await removePost(tx, report.targetKey);
+      const removed = await removePost(tx, report.targetKey, { keepReplies: actor.role === "moderator" });
       if (removed) {
         if (removed.voice) keys.push(removed.voice.key);
         actions.push("removed content");
@@ -231,9 +245,7 @@ router.post("/:id/resolve", async (req, res) => {
       resolvedById: actor.id,
       resolvedByHandle: actor.handle,
       resolvedAt: new Date(),
-    }).where(and(
-      eq(reports.targetType, report.targetType), eq(reports.targetKey, report.targetKey), eq(reports.status, "open"),
-    )).returning({ id: reports.id });
+    }).where(openTarget).returning({ id: reports.id });
     await log(change.decision === "dismiss" ? "dismissReport" : "resolveReport", report.targetUserId ?? report.targetKey,
       `${closed.length} report${closed.length === 1 ? "" : "s"}: ${summary}${change.note ? ` (${change.note})` : ""}`);
     return keys;
