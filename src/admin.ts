@@ -614,8 +614,8 @@ router.put("/users/:id/profile/:kind", async (req, res) => {
   const { kind } = req.params;
   if (kind !== "avatar" && kind !== "banner") throw new AuthError(404, "profile_media_not_found");
   const media = kind === "avatar"
-    ? await stageAvatarUpload(req, res)
-    : await stageBannerUpload(req, res);
+    ? await stageAvatarUpload(req, res, viewer.id)
+    : await stageBannerUpload(req, res, viewer.id);
   await replaceProfileMedia(id.data.toLowerCase(), media, viewer.id);
   res.json({ url: `/api/${media.key}` });
 });
