@@ -133,8 +133,46 @@ test("profile connections link, show, protect and unlink for every provider", as
     assert.deepEqual(live, { live: { alice: { login: "alice_tv" } } });
     await realFetch(`${base}/api/connections/twitch/live?handles=alice`);
     assert.equal(liveCalls.length, 1);
+    assert.equal((await call(bob, "PATCH", "/api/connections/twitch", { displayOnProfile: false })).status, 404);
+    const hiddenTwitch = await call(alice, "PATCH", "/api/connections/twitch", { displayOnProfile: false });
+    assert.equal(hiddenTwitch.status, 200);
+    assert.equal((await hiddenTwitch.json()).connection.displayOnProfile, false);
+    const hiddenLive = await (await realFetch(`${base}/api/connections/twitch/live?handles=alice`)).json();
+    assert.deepEqual(hiddenLive, { live: {} });
     assert.equal((await realFetch(`${base}/api/connections/twitch/live?handles=Bad Handle`)).status, 400);
     globalThis.fetch = stubbed;
+
+    await database.pool.query(
+      "INSERT INTO github_connections (user_id, github_id, login) VALUES ($1, '1', 'alice-gh')",
+      [alice.id],
+    );
+    const { rows: [domain] } = await database.pool.query(
+      "INSERT INTO user_domains (user_id, domain, token, verified_at) VALUES ($1, 'alice.example', 'token', now()) RETURNING id",
+      [alice.id],
+    );
+    const getProfile = async () => (await (await call(bob, "GET", "/api/profiles/alice")).json()).profile;
+    const visibleProfile = await getProfile();
+    assert.deepEqual(visibleProfile.domains, ["alice.example"]);
+    assert.equal(visibleProfile.github.login, "alice-gh");
+
+    for (const path of ["/api/github", `/api/domains/${domain.id}`]) {
+      assert.equal((await call(bob, "PATCH", path, { displayOnProfile: false })).status, 404);
+      assert.equal((await call(alice, "PATCH", path, { displayOnProfile: false })).status, 200);
+    }
+    const hiddenProfile = await getProfile();
+    assert.deepEqual(hiddenProfile.connections.map(({ provider }) => provider), ["discord"]);
+    assert.deepEqual(hiddenProfile.domains, []);
+    assert.equal(hiddenProfile.github, null);
+    assert.equal((await (await call(alice, "GET", "/api/github")).json()).github.displayOnProfile, false);
+    assert.equal((await (await call(alice, "GET", "/api/domains")).json()).domains[0].displayOnProfile, false);
+
+    for (const path of ["/api/connections/twitch", "/api/github", `/api/domains/${domain.id}`]) {
+      assert.equal((await call(alice, "PATCH", path, { displayOnProfile: true })).status, 200);
+    }
+    const restoredProfile = await getProfile();
+    assert.equal(restoredProfile.github.login, "alice-gh");
+    assert.deepEqual(restoredProfile.domains, ["alice.example"]);
+    assert.ok(restoredProfile.connections.some(({ provider }) => provider === "twitch"));
 
     const taken = await link(bob, "discord");
     assert.equal(taken.location, "http://localhost:3000/settings/account?connection=discord&result=account_taken");

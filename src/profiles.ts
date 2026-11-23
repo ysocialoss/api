@@ -238,7 +238,7 @@ router.get("/:handle", async (req, res) => {
       ...banDetailsSelection,
     })
     .from(users)
-    .leftJoin(githubConnections, eq(githubConnections.userId, users.id))
+    .leftJoin(githubConnections, and(eq(githubConnections.userId, users.id), eq(githubConnections.displayOnProfile, true)))
     .where(eq(users.id, db.select({ id: userHandles.userId }).from(userHandles).where(eq(userHandles.handle, req.params.handle))));
   if (!profile) throw new AuthError(404, "profile_not_found");
   if (profile.banReason) {
@@ -257,12 +257,12 @@ router.get("/:handle", async (req, res) => {
       profileUrl: connections.profileUrl,
     })
     .from(connections)
-    .where(eq(connections.userId, profile.id))
+    .where(and(eq(connections.userId, profile.id), eq(connections.displayOnProfile, true)))
     .orderBy(connections.createdAt);
   const linkedDomains = await db
     .select({ domain: userDomains.domain })
     .from(userDomains)
-    .where(and(eq(userDomains.userId, profile.id), isNotNull(userDomains.verifiedAt)))
+    .where(and(eq(userDomains.userId, profile.id), isNotNull(userDomains.verifiedAt), eq(userDomains.displayOnProfile, true)))
     .orderBy(userDomains.verifiedAt, userDomains.domain);
   const blocks = await blockState(db, viewerId, profile.id);
   if (blocks.blocking || blocks.blockedBy) {

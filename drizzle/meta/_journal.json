@@ -435,6 +435,13 @@
       "when": 1795457769447,
       "tag": "0061_moderation_activity_filters",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1795458699757,
+      "tag": "0062_connection_visibility",
+      "breakpoints": true
     }
   ]
 }
