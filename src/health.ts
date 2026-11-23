@@ -170,17 +170,31 @@ export function createHealthRouter(isStartupReady = () => true) {
       checks: { database: result },
     });
   });
-  router.get("/health", async (_req, res) => {
+  async function overall() {
     const [dbResult, r2Result, klipyResult, cnsResult] = await Promise.all([
       database(), r2(), klipy(), cns(),
     ]);
     const checks = { database: dbResult, r2: r2Result, klipy: klipyResult, cns: cnsResult };
     const ready = !draining && isStartupReady() && dbResult.status === "ok";
+    const status = !ready ? "unavailable" : Object.values(checks).every(
+      (check) => check.status === "ok",
+    ) ? "ok" : "degraded";
+    return { checks, ready, status };
+  }
+  router.get("/health", async (_req, res) => {
+    const { checks, ready, status } = await overall();
+    res.status(ready ? 200 : 503).json({ status, checks });
+  });
+  // Public, minimal view for external uptime monitors. Shares the cached probes
+  // with /health and omits latency, timestamps, and error detail.
+  router.get("/api/status", async (_req, res) => {
+    res.set("Cache-Control", "no-store");
+    const { checks, ready, status } = await overall();
     res.status(ready ? 200 : 503).json({
-      status: !ready ? "unavailable" : Object.values(checks).every(
-        (check) => check.status === "ok",
-      ) ? "ok" : "degraded",
-      checks,
+      status,
+      components: Object.fromEntries(
+        Object.entries(checks).map(([name, check]) => [name, check.status]),
+      ),
     });
   });
   return router;
