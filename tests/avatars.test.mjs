@@ -25,6 +25,7 @@ const admin = new pg.Pool({ connectionString: databaseUrl.href });
 databaseUrl.pathname = `/${databaseName}`;
 process.env.DATABASE_URL = databaseUrl.href;
 process.env.NODE_ENV = "test";
+process.env.ADMIN_ORIGIN = "https://admin.example.test";
 process.env.KLIPY_API_KEY = "test-klipy-key";
 process.env.SESSION_ENCRYPTION_KEY = "ab".repeat(32);
 if (!live) {
@@ -926,6 +927,55 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
           assert.ok(objects.has(saved.avatar_key));
         },
       );
+    await t.test("admins replace another user's profile media through the shared upload path", async () => {
+      const crop = { x: 0, y: 0.25, width: 1, height: 0.5 };
+      const uploadForBob = (kind, requestOrigin = env.ADMIN_ORIGIN, body = picture) => {
+        const query = kind === "banner" ? "?" + new URLSearchParams({ crop: JSON.stringify(crop) }) : "";
+        return fetch(`${origin}/api/admin/users/${bob.id}/profile/${kind}${query}`, {
+          method: "PUT",
+          headers: { ...headers, Origin: requestOrigin },
+          body,
+        });
+      };
+
+      await pool.query("UPDATE users SET role = 'moderator' WHERE id = $1", [alice.id]);
+      assert.equal((await uploadForBob("avatar")).status, 403);
+      await pool.query("UPDATE users SET role = 'admin' WHERE id = $1", [alice.id]);
+      assert.equal((await uploadForBob("avatar", "https://wrong.example.test")).status, 403);
+
+      const profileResponse = await fetch(`${origin}/api/admin/user/${alice.id}`, { headers });
+      assert.equal(profileResponse.status, 200);
+      const actorProfile = await profileResponse.json();
+      const media = {};
+      for (const kind of ["avatar", "banner"]) {
+        const response = await uploadForBob(kind);
+        assert.equal(response.status, 200);
+        const { url } = await response.json();
+        uploaded.push(url.slice("/api/".length));
+        assert.match(url, new RegExp(`^/api/${kind}s/`));
+        const served = await fetch(origin + url);
+        assert.equal(served.status, 200);
+        assert.match(served.headers.get("content-type"), /^image\//);
+        await served.arrayBuffer();
+        media[kind] = url;
+      }
+
+      assert.equal((await uploadForBob("avatar", env.ADMIN_ORIGIN, Buffer.from("invalid"))).status, 400);
+      const targetResponse = await fetch(`${origin}/api/admin/user/${bob.id}`, { headers });
+      assert.equal(targetResponse.status, 200);
+      const target = await targetResponse.json();
+      assert.equal(target.avatarUrl, media.avatar);
+      assert.equal(target.bannerUrl, media.banner);
+      assert.deepEqual(target.bannerCrop, crop);
+      const actor = await (await fetch(`${origin}/api/admin/user/${alice.id}`, { headers })).json();
+      assert.equal(actor.avatarUrl, actorProfile.avatarUrl);
+      assert.equal(actor.bannerUrl, actorProfile.bannerUrl);
+      const { rows: activity } = await pool.query(
+        "SELECT action FROM moderation_activity WHERE actor_id = $1 AND target_id = $2 ORDER BY action",
+        [alice.id, bob.id],
+      );
+      assert.deepEqual(activity.map(({ action }) => action), ["replaceAvatar", "replaceBanner"]);
+    });
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (live) {

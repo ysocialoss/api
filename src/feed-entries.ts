@@ -25,7 +25,7 @@ function selectPosts(ids: string[], viewerId: string | null) {
     .select(postSelection(viewerId))
     .from(posts)
     .innerJoin(users, eq(users.id, posts.authorId))
-    .where(and(inArray(posts.id, ids), isNull(users.bannedAt)));
+    .where(and(inArray(posts.id, ids), isNull(users.bannedAt), isNull(posts.hiddenAt)));
 }
 async function loadPosts(ids: string[], viewerId: string | null) {
   if (!ids.length) return new Map<string, PostRecord>();
@@ -73,7 +73,7 @@ export async function homeFeed(
       order by r.created_at desc, r.user_id desc
       limit 1
     ) lr on true
-    where (p.parent_id is null or lr.user_id is not null)
+    where p.hidden_at is null and (p.parent_id is null or lr.user_id is not null)
       ${viewerId ? sql`and ${notBlockedSql(viewerId, sql`p.author_id`)}` : sql``}
       ${
         cursor
@@ -121,10 +121,11 @@ export async function profileReposts(profile: FeedUser, viewerId: string | null,
     select post_id, at, kind, audience from (
       select r.post_id, r.created_at as at, 'repost' as kind, r.audience
       from post_reposts r
-      where r.user_id = ${profile.id} and ${repostVisibleSql(viewerId)}
+      join posts p on p.id = r.post_id
+      where r.user_id = ${profile.id} and p.hidden_at is null and ${repostVisibleSql(viewerId)}
       union all
       select q.id, q.created_at, 'quote', null::text
-      from posts q where q.author_id = ${profile.id} and q.is_quote
+      from posts q where q.author_id = ${profile.id} and q.is_quote and q.hidden_at is null
     ) e
     order by at desc, post_id desc
     limit ${limit}

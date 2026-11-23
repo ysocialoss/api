@@ -336,6 +336,7 @@ export const posts = pgTable(
       .defaultNow(),
     editedAt: timestamp("edited_at", { withTimezone: true, precision: 3 }),
     flaggedAt: timestamp("flagged_at", { withTimezone: true, precision: 3 }),
+    hiddenAt: timestamp("hidden_at", { withTimezone: true, precision: 3 }),
   },
   (table) => [
     index("posts_quoted_idx").on(table.quotedPostId).where(sql`${table.quotedPostId} IS NOT NULL`),

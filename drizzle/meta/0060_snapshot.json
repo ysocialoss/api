@@ -1,5 +1,5 @@
 {
-  "id": "e14ad2a1-e180-45b5-b8d6-f8e3e4f20506",
+  "id": "f40f696b-ae69-461c-b017-25cd27e7149b",
   "prevId": "4d0b4b5a-a831-49f8-98c6-2b3c8f543857",
   "version": "7",
   "dialect": "postgresql",
@@ -1458,69 +1458,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "moderation_activity_action_idx": {
-          "name": "moderation_activity_action_idx",
-          "columns": [
-            {
-              "expression": "action",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": false,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "moderation_activity_actor_idx": {
-          "name": "moderation_activity_actor_idx",
-          "columns": [
-            {
-              "expression": "actor_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": false,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "moderation_activity_target_idx": {
-          "name": "moderation_activity_target_idx",
-          "columns": [
-            {
-              "expression": "target_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": false,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {},
@@ -2728,6 +2665,12 @@
         },
         "flagged_at": {
           "name": "flagged_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "hidden_at": {
+          "name": "hidden_at",
           "type": "timestamp (3) with time zone",
           "primaryKey": false,
           "notNull": false

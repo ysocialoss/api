@@ -75,17 +75,17 @@ async function avatarFor(avatarUrl: string | null) {
 
 router.get("/posts/:id.png", async (req, res) => {
   const id = req.params.id;
+  const post = await findPost(id);
   const hit = cache.get(id);
   let png = hit && Date.now() - hit.at < cacheMs ? hit.png : undefined;
   if (!png) {
-    const post = await findPost(id);
     png = await renderPostCard(post, await avatarFor(post.author.avatarUrl));
     if (cache.size >= 300) cache.delete(cache.keys().next().value!);
     cache.set(id, { png, at: Date.now() });
   }
   res
     .set({
-      "Cache-Control": "public, max-age=300, s-maxage=3600",
+      "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
     })
     .type("image/png")
@@ -95,7 +95,7 @@ router.get("/posts/:id.png", async (req, res) => {
 router.get("/posts/:id", async (req, res) => {
   const post: OgPost = await findPost(req.params.id);
   res
-    .set("Cache-Control", "public, max-age=60")
+    .set("Cache-Control", "no-store")
     .type("html")
     .send(metaPage(postMeta(post, env.APP_ORIGIN), postSummary(post)));
 });

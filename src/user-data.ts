@@ -40,7 +40,7 @@ export const banDetailsSelection = {
   ) end`,
 };
 
-export const postCountSelection = sql<number>`(select count(*)::int from ${posts} where ${posts.authorId} = ${sql.identifier(getTableName(users))}.${sql.identifier(users.id.name)} and ${posts.parentId} is null)`;
+export const postCountSelection = sql<number>`(select count(*)::int from ${posts} where ${posts.authorId} = ${sql.identifier(getTableName(users))}.${sql.identifier(users.id.name)} and ${posts.parentId} is null and ${posts.hiddenAt} is null)`;
 
 export const publicProfileSelection = {
   bio: users.bio,

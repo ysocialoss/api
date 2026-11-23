@@ -4,7 +4,7 @@ import { db } from "./db/index.ts";
 import { postTopics, posts } from "./db/schema.ts";
 import { AuthError } from "./auth/provider.ts";
 import { extractTopics, isTopicName, normalizeTopic } from "./topics-text.ts";
-import { visiblePostAuthor } from "./post-data.ts";
+import { visiblePost } from "./post-data.ts";
 
 type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -60,7 +60,7 @@ router.get("/", async (req, res) => {
       .from(postTopics)
       .innerJoin(posts, eq(posts.id, postTopics.postId))
       .where(
-        and(visiblePostAuthor, sql`${posts.createdAt} > now() - make_interval(hours => ${TRENDING_WINDOW_HOURS})`),
+        and(visiblePost, sql`${posts.createdAt} > now() - make_interval(hours => ${TRENDING_WINDOW_HOURS})`),
       )
       .groupBy(postTopics.topic)
       .orderBy(
@@ -77,7 +77,7 @@ router.get("/", async (req, res) => {
     .select({ name: postTopics.topic, count: sql<number>`count(*)::int` })
     .from(postTopics)
     .innerJoin(posts, eq(posts.id, postTopics.postId))
-    .where(and(visiblePostAuthor, sql`starts_with(${postTopics.topic}, ${prefix})`))
+    .where(and(visiblePost, sql`starts_with(${postTopics.topic}, ${prefix})`))
     .groupBy(postTopics.topic)
     .orderBy(desc(sql`count(*)`), postTopics.topic)
     .limit(SUGGESTION_LIMIT);
@@ -89,7 +89,7 @@ router.get("/:name", async (req, res) => {
     .select({ posts: sql<number>`count(*)::int` })
     .from(postTopics)
     .innerJoin(posts, eq(posts.id, postTopics.postId))
-    .where(and(visiblePostAuthor, eq(postTopics.topic, name)));
+    .where(and(visiblePost, eq(postTopics.topic, name)));
   res.json({ topic: { name, posts: row?.posts ?? 0 } });
 });
 export default router;

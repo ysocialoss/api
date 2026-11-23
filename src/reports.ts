@@ -47,7 +47,8 @@ async function postTarget(viewerId: string, id: string): Promise<Target> {
     hasVoice: sql<boolean>`${posts.voice} is not null`,
     pollTitle: sql<string | null>`${posts.poll}->>'title'`,
     createdAt: posts.createdAt,
-  }).from(posts).innerJoin(users, eq(users.id, posts.authorId)).where(and(eq(posts.id, id), isNull(users.bannedAt)));
+  }).from(posts).innerJoin(users, eq(users.id, posts.authorId))
+    .where(and(eq(posts.id, id), isNull(users.bannedAt), isNull(posts.hiddenAt)));
   if (!post) throw new AuthError(404, "post_not_found");
   if (post.authorId === viewerId) throw new AuthError(409, "own_content");
   return {

@@ -17,7 +17,7 @@ import { env } from "./config.ts";
 import { endpointSchema, subscriptionSchema } from "./push-config.ts";
 import { userSelection } from "./user-data.ts";
 import { notificationPreview } from "./notification-content.ts";
-import { visiblePostAuthor } from "./post-data.ts";
+import { visiblePost } from "./post-data.ts";
 import { notBlockedSql } from "./blocks.ts";
 import { publishDmChange } from "./dm-events.ts";
 
@@ -107,7 +107,7 @@ router.get("/", async (req, res) => {
     })
     .from(notifications)
     .innerJoin(users, eq(users.id, notifications.actorId))
-    .leftJoin(posts, and(eq(posts.id, notifications.postId), visiblePostAuthor))
+    .leftJoin(posts, and(eq(posts.id, notifications.postId), visiblePost))
     .where(
       and(
         eq(notifications.recipientId, userId),
