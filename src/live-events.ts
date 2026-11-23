@@ -35,6 +35,8 @@ function broadcast(frame: string, includes: (audience: LiveAudience) => boolean 
   for (const [stream, audience] of streams) if (includes(audience)) write(stream, frame);
 }
 
+export const liveStreamCount = () => streams.size;
+
 export function canOpenLiveStream() {
   return streams.size < env.LIVE_MAX_STREAMS;
 }

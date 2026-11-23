@@ -47,7 +47,12 @@ export const moderationActivity = pgTable("moderation_activity", {
   action: text().notNull(),
   detail: text(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-}, (table) => [index("moderation_activity_created_idx").on(table.createdAt.desc(), table.id.desc())]);
+}, (table) => [
+  index("moderation_activity_created_idx").on(table.createdAt.desc(), table.id.desc()),
+  index("moderation_activity_action_idx").on(table.action, table.createdAt.desc()),
+  index("moderation_activity_actor_idx").on(table.actorId, table.createdAt.desc()),
+  index("moderation_activity_target_idx").on(table.targetId, table.createdAt.desc()),
+]);
 
 export const users = pgTable(
   "users",

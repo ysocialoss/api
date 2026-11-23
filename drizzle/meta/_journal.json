@@ -421,6 +421,13 @@
       "when": 1795441409291,
       "tag": "0059_notification_preferences",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1795456609693,
+      "tag": "0060_moderation_activity_filters",
+      "breakpoints": true
     }
   ]
 }

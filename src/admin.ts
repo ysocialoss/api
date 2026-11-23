@@ -3,6 +3,8 @@ import { and, asc, count, desc, eq, gt, gte, inArray, isNull, isNotNull, sql } f
 import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
 import { requireAdminWrite, requireStaff } from "./admin-access.ts";
+import adminActivity from "./admin-activity.ts";
+import adminSystem from "./admin-system.ts";
 import adminReports, { openReportCount } from "./admin-reports.ts";
 import { db } from "./db/index.ts";
 import { authIdentities, githubConnections, moderationActivity, pollVotes, postImageFlags, postImages, posts, userRole, users } from "./db/schema.ts";
@@ -26,6 +28,8 @@ router.use((_req, res, next) => {
 });
 
 router.use("/reports", adminReports);
+router.use("/activity", adminActivity);
+router.use("/system", adminSystem);
 
 router.get("/session", async (req, res) => {
   await requireStaff(req);
@@ -214,16 +218,6 @@ router.get("/waitlist", async (req, res) => {
 router.get("/waitlist/live", async (req, res) => {
   await requireStaff(req);
   serveLiveStream(req, res, "waitlist");
-});
-
-router.get("/activity", async (req, res) => {
-  await requireStaff(req);
-  const input = userListQuery.pick({ page: true }).safeParse(req.query);
-  if (!input.success) throw new AuthError(400, "invalid_activity_query");
-  const rows = await db.select().from(moderationActivity)
-    .orderBy(desc(moderationActivity.createdAt), desc(moderationActivity.id))
-    .limit(pageSize + 1).offset((input.data.page - 1) * pageSize);
-  res.json({ entries: rows.slice(0, pageSize), hasNextPage: rows.length > pageSize });
 });
 
 const contentQuery = userListQuery.extend({
