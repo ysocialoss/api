@@ -76,6 +76,13 @@ await test("health routes probe dependencies, share work, and recover after expi
       }
     }
     assert.deepEqual([dbCalls, r2Calls, klipyCalls, cnsCalls], [1, 1, 1, 2]);
+    const publicStatus = await request("/api/status");
+    assert.equal(publicStatus.status, 200);
+    assert.equal(publicStatus.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await publicStatus.json(), {
+      status: "ok", components: { database: "ok", r2: "ok", klipy: "ok", cns: "ok" },
+    });
+    assert.deepEqual([dbCalls, r2Calls, klipyCalls, cnsCalls], [1, 1, 1, 2]);
     assert.equal((await request("/ready")).status, 200);
     const originalNow = Date.now;
     let offset = 301_000;
@@ -90,6 +97,9 @@ await test("health routes probe dependencies, share work, and recover after expi
     assert.equal(body.checks.klipy.status, "rate_limited");
     assert.equal(body.checks.cns.status, "unavailable");
     assert.ok(!JSON.stringify(body).includes("secret"));
+    const publicFailed = await request("/api/status");
+    assert.equal(publicFailed.status, 503);
+    assert.equal((await publicFailed.json()).status, "unavailable");
     assert.equal((await request("/ready")).status, 503);
     offset += 16_000;
     failDatabase = false;
