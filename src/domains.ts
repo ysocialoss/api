@@ -43,11 +43,13 @@ const selection = {
   domain: userDomains.domain,
   token: userDomains.token,
   verifiedAt: userDomains.verifiedAt,
+  displayOnProfile: userDomains.displayOnProfile,
 };
-const present = (row: { id: string; domain: string; token: string; verifiedAt: Date | null }) => ({
+const present = (row: Pick<typeof userDomains.$inferSelect, keyof typeof selection>) => ({
   id: row.id,
   domain: row.domain,
   verified: row.verifiedAt !== null,
+  displayOnProfile: row.displayOnProfile,
   record: row.verifiedAt
     ? null
     : { type: "TXT" as const, host: `${challengeLabel}.${row.domain}`, name: challengeLabel, value: `${valuePrefix}${row.token}` },
@@ -173,6 +175,19 @@ router.post("/:id/verify", async (req, res) => {
     throw error;
   }
   res.json({ domain: present(verified ?? { ...row, verifiedAt: new Date() }) });
+});
+
+router.patch("/:id", async (req, res) => {
+  const { id: userId } = await requireUser(req);
+  const id = z.uuid().safeParse(req.params.id);
+  if (!id.success) throw new AuthError(404, "domain_not_found");
+  const input = z.strictObject({ displayOnProfile: z.boolean() }).safeParse(req.body);
+  if (!input.success) throw new AuthError(400, "invalid_domain");
+  const [domain] = await db.update(userDomains).set(input.data)
+    .where(and(eq(userDomains.id, id.data), eq(userDomains.userId, userId), isNotNull(userDomains.verifiedAt)))
+    .returning(selection);
+  if (!domain) throw new AuthError(404, "domain_not_found");
+  res.json({ domain: present(domain) });
 });
 
 router.delete("/:id", async (req, res) => {

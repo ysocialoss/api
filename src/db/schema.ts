@@ -226,6 +226,7 @@ export const connections = pgTable("connections", {
   username: text().notNull(),
   displayName: text("display_name").notNull(),
   profileUrl: text("profile_url").notNull(),
+  displayOnProfile: boolean("display_on_profile").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   unique("connections_user_provider_unique").on(table.userId, table.provider),
@@ -239,6 +240,7 @@ export const userDomains = pgTable("user_domains", {
   domain: text().notNull(),
   token: text().notNull(),
   verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  displayOnProfile: boolean("display_on_profile").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   unique("user_domains_user_domain_unique").on(table.userId, table.domain),
@@ -253,6 +255,7 @@ export const githubConnections = pgTable("github_connections", {
   githubId: text("github_id").notNull().unique(),
   login: text().notNull(),
   contributionCount: integer("contribution_count"),
+  displayOnProfile: boolean("display_on_profile").notNull().default(true),
   checkedAt: timestamp("checked_at", { withTimezone: true }),
   attemptedAt: timestamp("attempted_at", { withTimezone: true }),
 }, (table) => [

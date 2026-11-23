@@ -52,7 +52,7 @@ export async function liveTwitchStreams(handles: string[]) {
     .select({ handle: users.handle, externalId: connections.externalId, login: connections.username })
     .from(connections)
     .innerJoin(users, eq(users.id, connections.userId))
-    .where(and(eq(connections.provider, "twitch"), inArray(users.handle, handles)));
+    .where(and(eq(connections.provider, "twitch"), eq(connections.displayOnProfile, true), inArray(users.handle, handles)));
   const stale = rows.filter((row) => {
     const hit = checked.get(row.externalId);
     return !hit || Date.now() - hit.at > CACHE_MS;

@@ -428,6 +428,13 @@
       "when": 1795453884362,
       "tag": "0060_post_visibility",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1795456773880,
+      "tag": "0061_connection_visibility",
+      "breakpoints": true
     }
   ]
 }
