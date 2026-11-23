@@ -13,7 +13,7 @@ export function mentionHandles(content: string) {
 
 type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-export async function syncMentions(tx: Transaction, postId: string, actorId: string, content: string) {
+export async function syncMentions(tx: Transaction, postId: string, notifyAs: string | null, content: string) {
   const handles = mentionHandles(content);
   await tx.delete(postMentions).where(and(
     eq(postMentions.postId, postId),
@@ -31,9 +31,10 @@ export async function syncMentions(tx: Transaction, postId: string, actorId: str
   const added = await tx.insert(postMentions).values(targets.map((user) => ({
     postId, userId: user.id, handle: user.handle,
   }))).onConflictDoNothing().returning({ userId: postMentions.userId });
+  if (!notifyAs) return;
   for (const target of added) {
     await recordNotification(tx, {
-      recipientId: target.userId, actorId, kind: "mention", postId, subject: postId,
+      recipientId: target.userId, actorId: notifyAs, kind: "mention", postId, subject: postId,
     });
   }
 }

@@ -1,5 +1,4 @@
 import {
-  postFields,
   postSelection,
   serializePost,
   reactionSelection,
@@ -53,6 +52,7 @@ import { postFilterConditions, postMatchesSql, readPostFilters, readSearchQuery 
 import { extractTopics } from "./topics-text.ts";
 import { affectedPostIds, publishLiveChange, publishLivePost } from "./live-events.ts";
 import { removePost } from "./post-removal.ts";
+import { editPost, postContentSchema } from "./post-edit.ts";
 import { maxPostImages } from "./post-images.ts";
 
 import { syncMentions } from "./mentions.ts";
@@ -66,26 +66,9 @@ import { previewIconForPost, previewImageForPost, previewsForPost } from "./link
 
 const router = Router();
 
-const contentSchema = z.strictObject({
-  content: z
-    .string()
-    .trim()
-    .refine((value) => !value.includes("\u0000"))
-    .refine(
-      (value) =>
-        !/(?:^|\n)(?:[^\S\n]*\n){3}/.test(
-          value.replace(/\r\n?|[\u2028\u2029]/g, "\n"),
-        ),
-      "Use at most two blank lines in a row.",
-    )
-    .refine((value) => {
-      const length = Array.from(value).length;
-      return length <= 2000;
-    }),
-});
-const createSchema = contentSchema
+const createSchema = postContentSchema
   .extend({
-    content: contentSchema.shape.content.default(""),
+    content: postContentSchema.shape.content.default(""),
     clientId: z.uuid().optional(),
     attachmentIds: z.array(z.uuid().transform((id) => id.toLowerCase()))
       .max(maxPostImages)
@@ -984,53 +967,12 @@ router.delete("/:id/pin", async (req, res) => {
 });
 router.patch("/:id", async (req, res) => {
   const user = await requireUser(req);
-  const parsed = contentSchema.safeParse(req.body);
+  const parsed = postContentSchema.safeParse(req.body);
   if (!parsed.success) throw new AuthError(400, "invalid_content");
-  const updated = await db.transaction(async (tx) => {
-    // Acquire the row before evaluating the clock, including waits for other writers.
-    const [existing] = await tx
-      .select({
-        authorId: posts.authorId,
-        content: posts.content,
-        gif: posts.gif,
-        voice: posts.voice,
-        imageIds: posts.imageIds,
-        poll: posts.poll,
-        createdAt: posts.createdAt,
-        editedAt: posts.editedAt,
-      })
-      .from(posts)
-      .where(eq(posts.id, req.params.id))
-      .for("update");
-    if (!existing) throw new AuthError(404, "post_not_found");
-    if (existing.authorId !== user.id)
-      throw new AuthError(403, "not_post_author");
-    if (!parsed.data.content && !existing.gif && !existing.poll && !existing.voice && !existing.imageIds.length)
-      throw new AuthError(400, "invalid_content");
-    const [saved] = await tx
-      .update(posts)
-      .set({ content: parsed.data.content, editedAt: sql`clock_timestamp()` })
-      .where(
-        and(
-          eq(posts.id, req.params.id),
-          sql`clock_timestamp() < ${posts.createdAt} + interval '15 minutes'`,
-        ),
-      )
-      .returning(postFields);
-    if (!saved) throw new AuthError(409, "edit_window_expired");
-    await syncPostTopics(tx, req.params.id, parsed.data.content);
-    if (existing.content !== parsed.data.content)
-      await tx.insert(postEdits).values({
-        postId: req.params.id,
-        content: existing.content,
-        versionAt: existing.editedAt ?? existing.createdAt,
-      });
-    await syncMentions(tx, saved.id, user.id, parsed.data.content);
-    await publishLiveChange(tx, await affectedPostIds(tx, saved.id));
-    return saved;
-  });
+  const id = req.params.id;
+  await db.transaction((tx) => editPost(tx, { id, content: parsed.data.content, editor: { kind: "author", id: user.id } }));
   res.json({
-    post: await findPost(updated.id, user.id),
+    post: await findPost(id, user.id),
     serverNow: new Date().toISOString(),
   });
 });
