@@ -1,0 +1,3 @@
+CREATE INDEX "moderation_activity_action_idx" ON "moderation_activity" USING btree ("action","created_at" DESC NULLS LAST);--> statement-breakpoint
+CREATE INDEX "moderation_activity_actor_idx" ON "moderation_activity" USING btree ("actor_id","created_at" DESC NULLS LAST);--> statement-breakpoint
+CREATE INDEX "moderation_activity_target_idx" ON "moderation_activity" USING btree ("target_id","created_at" DESC NULLS LAST);

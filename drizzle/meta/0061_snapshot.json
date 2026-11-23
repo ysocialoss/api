@@ -1,5 +1,5 @@
 {
-  "id": "a5d4c7b3-b3e3-4eba-9706-ef88f3f0c8a6",
+  "id": "9c0765f8-b180-4d04-afae-3fadf6f5fdac",
   "prevId": "f40f696b-ae69-461c-b017-25cd27e7149b",
   "version": "7",
   "dialect": "postgresql",
@@ -374,13 +374,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
-        },
-        "display_on_profile": {
-          "name": "display_on_profile",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
         },
         "created_at": {
           "name": "created_at",
@@ -1144,13 +1137,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "display_on_profile": {
-          "name": "display_on_profile",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
         "checked_at": {
           "name": "checked_at",
           "type": "timestamp with time zone",
@@ -1463,6 +1449,69 @@
             },
             {
               "expression": "id",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "moderation_activity_action_idx": {
+          "name": "moderation_activity_action_idx",
+          "columns": [
+            {
+              "expression": "action",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "moderation_activity_actor_idx": {
+          "name": "moderation_activity_actor_idx",
+          "columns": [
+            {
+              "expression": "actor_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "moderation_activity_target_idx": {
+          "name": "moderation_activity_target_idx",
+          "columns": [
+            {
+              "expression": "target_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
               "isExpression": false,
               "asc": false,
               "nulls": "last"
@@ -3512,13 +3561,6 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
-        },
-        "display_on_profile": {
-          "name": "display_on_profile",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
         },
         "created_at": {
           "name": "created_at",
