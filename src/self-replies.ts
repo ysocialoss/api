@@ -1,4 +1,4 @@
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "./db/index.ts";
 import { posts, users } from "./db/schema.ts";
 import { postSelection, serializePost } from "./post-data.ts";
@@ -18,7 +18,7 @@ export async function attachSelfReplies<T extends Listed>(
       where r.parent_id in (${sql.join(
         rootIds.map((id) => sql`${id}::uuid`),
         sql`, `,
-      )}) and r.author_id = p.author_id
+      )}) and r.author_id = p.author_id and r.hidden_at is null
       order by r.parent_id, r.created_at asc, r.id asc
     `);
     if (firsts.rows.length) {
@@ -26,7 +26,7 @@ export async function attachSelfReplies<T extends Listed>(
         .select(postSelection(viewerId))
         .from(posts)
         .innerJoin(users, eq(users.id, posts.authorId))
-        .where(inArray(posts.id, firsts.rows.map((row) => row.id)));
+        .where(and(inArray(posts.id, firsts.rows.map((row) => row.id)), isNull(posts.hiddenAt)));
       const replies = new Map(rows.map((row) => [row.id, serializePost(row)]));
       for (const row of firsts.rows) {
         const reply = replies.get(row.id);

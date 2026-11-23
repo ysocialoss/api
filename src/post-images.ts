@@ -1,13 +1,13 @@
 import express, { type Response } from "express";
 import { randomUUID } from "node:crypto";
-import { and, count, eq, gt, isNotNull, isNull, lte } from "drizzle-orm";
+import { and, count, eq, gt, isNull, lte } from "drizzle-orm";
 import sharp from "sharp";
 import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
 import { requireUser, readViewerId } from "./auth/request.ts";
 import { env } from "./config.ts";
 import { db } from "./db/index.ts";
-import { mediaDeletions, postImageFlags, postImages, users } from "./db/schema.ts";
+import { mediaDeletions, postImageFlags, postImages, posts, users } from "./db/schema.ts";
 import { stageMediaUpload } from "./storage/media-lifecycle.ts";
 import { avatarStorage } from "./storage/r2.ts";
 
@@ -177,7 +177,8 @@ router.get("/:id", async (req, res) => {
   if (!id.success) throw new AuthError(404, "post_image_not_found");
   const [published] = await db.select({ data: postImages.data }).from(postImages)
     .innerJoin(users, eq(users.id, postImages.uploaderId))
-    .where(and(eq(postImages.id, id.data), isNotNull(postImages.postId), isNull(users.bannedAt)));
+    .innerJoin(posts, eq(posts.id, postImages.postId))
+    .where(and(eq(postImages.id, id.data), isNull(users.bannedAt), isNull(posts.hiddenAt)));
   if (published) return sendPostImage(res, published.data);
 
   const viewerId = await readViewerId(req);

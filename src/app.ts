@@ -164,6 +164,7 @@ if (import.meta.main) {
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'posts' AND column_name = 'gif') AND
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'posts' AND column_name = 'voice') AND
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'posts' AND column_name = 'flagged_at') AND
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'posts' AND column_name = 'hidden_at') AND
       to_regclass('public.post_mentions') IS NOT NULL AND
       to_regclass('public.users') IS NOT NULL AND
       to_regclass('public.user_handles') IS NOT NULL AND

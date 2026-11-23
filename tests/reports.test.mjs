@@ -114,9 +114,10 @@ test("users report posts, profiles and messages; staff resolve them", async (t) 
     const detail = await (await read(moderator, `/api/admin/reports/${reports[0].id}`)).json();
     assert.equal(detail.related.length, 1);
     assert.equal(detail.target.exists, true);
+    assert.equal(detail.canRemoveContent, true);
 
     const adminOrigin = "http://localhost:3200";
-    assert.equal((await send(moderator, `/api/admin/reports/${reports[0].id}/resolve`, { decision: "resolve", removeContent: true }, adminOrigin)).status, 403);
+    assert.equal((await send(moderator, `/api/admin/reports/${messageReport.id}/resolve`, { decision: "resolve", removeContent: true }, adminOrigin)).status, 403);
     assert.equal((await send(moderator, `/api/admin/reports/${reports[0].id}/resolve`, { decision: "dismiss" })).status, 403);
     const userReport = reports.find((report) => report.targetType === "user");
     assert.equal((await send(moderator, `/api/admin/reports/${userReport.id}/resolve`, { decision: "dismiss", note: "Satire" }, adminOrigin)).status, 204);
@@ -142,9 +143,80 @@ test("users report posts, profiles and messages; staff resolve them", async (t) 
     assert.equal((await send(moderator, `/api/admin/reports/${userReport.id}/reopen`, {}, adminOrigin)).status, 204);
     const open = await (await read(moderator, "/api/admin/reports/summary")).json();
     assert.equal(open.open, 1);
+
+    const { rows: [target] } = await database.pool.query(
+      "INSERT INTO posts (author_id, content) VALUES ($1, 'Moderation target') RETURNING id", [second.id],
+    );
+    const { rows: [reply] } = await database.pool.query(
+      "INSERT INTO posts (author_id, parent_id, content) VALUES ($1, $2, 'Keep this reply') RETURNING id", [reporter.id, target.id],
+    );
+    const { rows: [quote] } = await database.pool.query(
+      "INSERT INTO posts (author_id, quoted_post_id, is_quote, content) VALUES ($1, $2, true, 'Quote') RETURNING id", [reporter.id, target.id],
+    );
+    const { rows: [image] } = await database.pool.query(
+      "INSERT INTO post_images (uploader_id, post_id, data, expires_at) VALUES ($1, $2, decode('00', 'hex'), now()) RETURNING id",
+      [second.id, target.id],
+    );
+    const changeVisibility = (who, hidden, origin = adminOrigin) => fetch(base + `/api/admin/posts/${target.id}/visibility`, {
+      method: "PATCH", headers: { Cookie: who.cookie, Origin: origin, "Content-Type": "application/json" },
+      body: JSON.stringify({ hidden }),
+    });
+    const publicPath = `/api/posts/${target.id}`;
+    const staffPath = `/api/admin/post/${target.id}`;
+    const reportTarget = (who) => send(who, "/api/reports", { reason: "spam", target: { type: "post", id: target.id } });
+    const deleteDirectly = () => fetch(base + `/api/admin/posts/${target.id}`, {
+      method: "DELETE", headers: { Cookie: moderator.cookie, Origin: adminOrigin },
+    });
+    assert.equal((await deleteDirectly()).status, 403);
+    assert.equal((await reportTarget(moderator)).status, 201);
+    const { reports: [{ id: ownReport }] } = await (await read(moderator, "/api/admin/reports?type=post")).json();
+    assert.equal((await (await read(moderator, `/api/admin/reports/${ownReport}`)).json()).canRemoveContent, false);
+    const removeFromReport = (id) => send(moderator, `/api/admin/reports/${id}/resolve`, { decision: "resolve", removeContent: true }, adminOrigin);
+    const rejected = await removeFromReport(ownReport);
+    assert.equal(rejected.status, 403);
+    assert.deepEqual(await rejected.json(), { error: "independent_post_report_required" });
+
+    assert.equal((await read(reporter, publicPath)).status, 200);
+    assert.equal((await changeVisibility(reporter, true)).status, 403);
+    assert.equal((await changeVisibility(moderator, true, "http://evil.test")).status, 403);
+    assert.equal((await changeVisibility(moderator, true)).status, 204);
+    assert.equal((await changeVisibility(moderator, true)).status, 204);
+    const hidden = await (await read(moderator, staffPath)).json();
+    assert.ok(hidden.hiddenAt);
+    assert.equal(hidden.canSetVisibility, true);
+    assert.equal(hidden.canRemove, false);
+    assert.equal((await read(reporter, publicPath)).status, 404);
+    assert.equal((await read(reporter, `${publicPath}/edits`)).status, 404);
+    assert.equal((await read(reporter, `/api/post-images/${image.id}`)).status, 404);
+    assert.equal((await read(moderator, `/api/admin/post-images/${image.id}`)).status, 200);
+    assert.deepEqual((await (await read(reporter, `/api/posts/states?ids=${target.id}`)).json()).hiddenIds, [target.id]);
+    const feed = await (await read(reporter, "/api/posts")).json();
+    assert.ok(!feed.posts.some(({ id }) => id === target.id));
+    assert.deepEqual(feed.posts.find(({ id }) => id === quote.id).quote, { state: "unavailable" });
+    assert.equal((await read(reporter, `/api/posts/${reply.id}`)).status, 200);
+    assert.equal((await changeVisibility(moderator, false)).status, 204);
+    assert.equal((await read(reporter, publicPath)).status, 200);
+    assert.equal((await read(reporter, `/api/post-images/${image.id}`)).status, 200);
+
+    assert.equal((await reportTarget(reporter)).status, 201);
+    assert.equal((await reportTarget(admin)).status, 201);
+    assert.equal((await deleteDirectly()).status, 403);
+    const { reports: postReports } = await (await read(moderator, "/api/admin/reports?type=post")).json();
+    const independent = postReports.find(({ reporterId }) => reporterId === reporter.id);
+    const otherIndependent = postReports.find(({ reporterId }) => reporterId === admin.id);
+    assert.equal((await (await read(moderator, `/api/admin/reports/${independent.id}`)).json()).canRemoveContent, true);
+    assert.equal((await changeVisibility(moderator, true)).status, 204);
+    const results = await Promise.all([removeFromReport(independent.id), removeFromReport(otherIndependent.id)]);
+    assert.deepEqual(results.map(({ status }) => status).sort(), [204, 409]);
+    assert.equal((await read(moderator, staffPath)).status, 404);
+    const preserved = await (await read(reporter, `/api/posts/${reply.id}`)).json();
+    assert.equal(preserved.post.content, "Keep this reply");
+    assert.equal(preserved.post.parentId, null);
+
     const { rows: activity } = await database.pool.query("SELECT action FROM moderation_activity ORDER BY created_at");
-    for (const action of ["dismissReport", "removePost", "banUser", "resolveReport", "removeMessage", "reopenReport"])
+    for (const action of ["dismissReport", "removePost", "banUser", "resolveReport", "removeMessage", "reopenReport", "hidePost", "unhidePost"])
       assert.ok(activity.some((row) => row.action === action), action);
+    assert.equal(activity.filter(({ action }) => action === "hidePost").length, 2);
   } finally {
     if (server) {
       server.closeAllConnections();

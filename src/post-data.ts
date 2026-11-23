@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { and, isNull, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { postLikes, postReposts, postSaves, posts, profilePins, users } from "./db/schema.ts";
 import { avatarUrlSelection, userSelection } from "./user-data.ts";
@@ -6,10 +6,10 @@ import type { PollDefinition } from "./poll-schema.ts";
 
 const previewAvatarUrl = avatarUrlSelection(alias(users, "u"));
 
-export const visiblePostAuthor = sql`exists (
+export const visiblePost = and(isNull(posts.hiddenAt), sql`exists (
   select 1 from users visible_author
   where visible_author.id = ${posts.authorId} and visible_author.banned_at is null
-)`;
+)`);
 
 export const postFields = {
   id: posts.id,
@@ -83,7 +83,7 @@ export type QuotedPost = {
 export type PostQuote = { state: "available"; post: QuotedPost } | { state: "unavailable" };
 export const quoteSelection = {
   quotes: sql<number>`(select count(*)::int from posts q join users u on u.id = q.author_id
-    where q.quoted_post_id = ${posts.id} and u.banned_at is null)`,
+    where q.quoted_post_id = ${posts.id} and q.hidden_at is null and u.banned_at is null)`,
   // The embedded post, one level deep. Null for posts that are not quotes.
   quote: sql<PostQuote | null>`case when ${posts.isQuote} then (
     coalesce((
@@ -96,13 +96,13 @@ export const quoteSelection = {
         'author', jsonb_build_object('id', u.id, 'handle', u.handle, 'displayName', u.display_name,
           'avatarUrl', ${previewAvatarUrl})
       ))
-      from posts q join users u on u.id = q.author_id where q.id = ${posts.quotedPostId} and u.banned_at is null
+      from posts q join users u on u.id = q.author_id where q.id = ${posts.quotedPostId} and q.hidden_at is null and u.banned_at is null
     ), jsonb_build_object('state', 'unavailable'))
   ) end`,
   // Who a reply answers, so a reply shown outside its thread still has context.
   replyTo: sql<{ id: string; handle: string; displayName: string } | null>`(
     select jsonb_build_object('id', pp.id, 'handle', pu.handle, 'displayName', pu.display_name)
-    from posts pp join users pu on pu.id = pp.author_id where pp.id = ${posts.parentId}
+    from posts pp join users pu on pu.id = pp.author_id where pp.id = ${posts.parentId} and pp.hidden_at is null
   )`,
 };
 type PollResult = Omit<PollDefinition, "options"> & {
@@ -177,7 +177,7 @@ export const postSelection = (viewerId: string | null) => ({
       join descendants on reply.parent_id = descendants.id
     )
     select count(*)::int from descendants d join posts p on p.id = d.id
-    join users u on u.id = p.author_id where u.banned_at is null
+    join users u on u.id = p.author_id where u.banned_at is null and p.hidden_at is null
   )`,
   author: userSelection,
 });

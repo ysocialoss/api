@@ -297,14 +297,14 @@ router.get("/:handle", async (req, res) => {
       .select(postSelection(viewerId))
       .from(posts)
       .innerJoin(users, eq(users.id, posts.authorId))
-      .where(and(eq(posts.authorId, profile.id), isNull(posts.parentId)))
+      .where(and(eq(posts.authorId, profile.id), isNull(posts.parentId), isNull(posts.hiddenAt)))
       .orderBy(desc(posts.createdAt), desc(posts.id))
       .limit(20),
     db
       .select(postSelection(viewerId))
       .from(posts)
       .innerJoin(users, eq(users.id, posts.authorId))
-      .where(and(eq(posts.authorId, profile.id), isNotNull(posts.parentId)))
+      .where(and(eq(posts.authorId, profile.id), isNotNull(posts.parentId), isNull(posts.hiddenAt)))
       .orderBy(desc(posts.createdAt), desc(posts.id))
       .limit(20),
     profileReposts(profile, viewerId),
@@ -313,7 +313,7 @@ router.get("/:handle", async (req, res) => {
       .from(profilePins)
       .innerJoin(posts, eq(posts.id, profilePins.postId))
       .innerJoin(users, eq(users.id, posts.authorId))
-      .where(eq(profilePins.userId, profile.id)),
+      .where(and(eq(profilePins.userId, profile.id), isNull(posts.hiddenAt))),
   ]);
   const ancestry =
     replies.length === 0
@@ -346,7 +346,7 @@ router.get("/:handle", async (req, res) => {
           .select(postSelection(viewerId))
           .from(posts)
           .innerJoin(users, eq(users.id, posts.authorId))
-          .where(and(inArray(posts.id, ancestorIds), isNull(users.bannedAt)));
+          .where(and(inArray(posts.id, ancestorIds), isNull(users.bannedAt), isNull(posts.hiddenAt)));
   const ancestorsById = new Map(
     ancestors.map((post) => [post.id, serializePost(post)]),
   );

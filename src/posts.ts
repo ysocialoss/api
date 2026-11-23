@@ -7,7 +7,7 @@ import {
   pollSelection,
   mutualFollowSql,
   repostVisibleSql,
-  visiblePostAuthor,
+  visiblePost,
 } from "./post-data.ts";
 import { homeFeed } from "./feed-entries.ts";
 import { notBlockedSql, requireNotBlocked } from "./blocks.ts";
@@ -91,7 +91,7 @@ export async function findPost(id: string, viewerId: string | null = null) {
     .select(postSelection(viewerId))
     .from(posts)
     .innerJoin(users, eq(users.id, posts.authorId))
-    .where(and(eq(posts.id, id), isNull(users.bannedAt)));
+    .where(and(eq(posts.id, id), isNull(users.bannedAt), isNull(posts.hiddenAt)));
   if (!post) throw new AuthError(404, "post_not_found");
   return serializePost(post);
 }
@@ -123,7 +123,7 @@ async function createPost({
       const [parent] = await tx
         .select({ id: posts.id, authorId: posts.authorId })
         .from(posts)
-        .where(and(eq(posts.id, parentId), visiblePostAuthor))
+        .where(and(eq(posts.id, parentId), visiblePost))
         .for("key share");
       if (!parent) throw new AuthError(404, "post_not_found");
       await requireNotBlocked(tx, userId, parent.authorId);
@@ -136,7 +136,7 @@ async function createPost({
       const [quoted] = await tx
         .select({ id: posts.id, authorId: posts.authorId })
         .from(posts)
-        .where(and(eq(posts.id, quotedPostId), visiblePostAuthor))
+        .where(and(eq(posts.id, quotedPostId), visiblePost))
         .for("key share");
       if (quoted) await requireNotBlocked(tx, userId, quoted.authorId);
       if (quoted) quotedAuthor = quoted.authorId;
@@ -293,7 +293,7 @@ async function loadAncestors(
     .select(postSelection(viewerId))
     .from(posts)
     .innerJoin(users, eq(users.id, posts.authorId))
-    .where(and(isNull(users.bannedAt), inArray(posts.id, [...new Set(chains.rows.map((row) => row.id))])));
+    .where(and(isNull(users.bannedAt), isNull(posts.hiddenAt), inArray(posts.id, [...new Set(chains.rows.map((row) => row.id))])));
   const byId = new Map(ancestorRows.map((row) => [row.id, serializePost(row)]));
   for (const { origin, id } of chains.rows) {
     const found = byId.get(id);
@@ -351,6 +351,7 @@ const listPosts: import("express").RequestHandler = async (req, res) => {
     .where(
       and(
         isNull(users.bannedAt),
+        isNull(posts.hiddenAt),
         notBlockedSql(viewerId, posts.authorId),
         parentId ? eq(posts.parentId, parentId) : undefined,
         textSearch ? postMatchesSql(textSearch) : undefined,
@@ -420,7 +421,7 @@ router.get("/poll-results", async (req, res) => {
   const results = await db
     .select({ id: posts.id, poll: pollSelection(viewerId) })
     .from(posts)
-    .where(and(inArray(posts.id, parsed.data.ids), visiblePostAuthor, sql`${posts.poll} is not null`));
+    .where(and(inArray(posts.id, parsed.data.ids), visiblePost, sql`${posts.poll} is not null`));
   res.json({ viewerId, results });
 });
 router.get("/states", async (req, res) => {
@@ -431,14 +432,14 @@ router.get("/states", async (req, res) => {
   if (!parsed.success) throw new AuthError(400, "invalid_post_id");
   const viewerId = await readViewerId(req);
   const rows = await db
-    .select({ ...postSelection(viewerId), bannedAt: users.bannedAt })
+    .select({ ...postSelection(viewerId), hidden: sql<boolean>`${users.bannedAt} is not null or ${posts.hiddenAt} is not null` })
     .from(posts)
     .innerJoin(users, eq(users.id, posts.authorId))
     .where(inArray(posts.id, parsed.data.ids));
   res.json({
     viewerId,
-    posts: rows.flatMap(({ bannedAt, ...row }) => bannedAt ? [] : [serializePost(row)]),
-    hiddenIds: rows.filter((row) => row.bannedAt).map((row) => row.id),
+    posts: rows.flatMap(({ hidden, ...row }) => hidden ? [] : [serializePost(row)]),
+    hiddenIds: rows.filter((row) => row.hidden).map((row) => row.id),
   });
 });
 router.post("/", async (req, res) => {
@@ -474,6 +475,7 @@ router.get("/saved", async (req, res) => {
       and(
         eq(postSaves.userId, viewerId),
         isNull(users.bannedAt),
+        isNull(posts.hiddenAt),
         notBlockedSql(viewerId, posts.authorId),
         cursor
           ? or(
@@ -512,7 +514,7 @@ async function postContent(id: string) {
   const [post] = await db
     .select({ content: posts.content })
     .from(posts)
-    .where(and(eq(posts.id, id), visiblePostAuthor));
+    .where(and(eq(posts.id, id), visiblePost));
   if (!post) throw new AuthError(404, "post_not_found");
   return post.content;
 }
@@ -524,7 +526,7 @@ router.get("/:id/link-previews", async (req, res) => {
   res.json(await previewsForPost(content, Number(offset)));
 });
 const previewAssetHeaders = {
-  "Cache-Control": "public, max-age=3600",
+  "Cache-Control": "no-store",
   "Cross-Origin-Resource-Policy": "same-origin",
   "X-Content-Type-Options": "nosniff",
 };
@@ -589,6 +591,7 @@ router.get("/:id/thread", async (req, res) => {
       )
       select t.id from tree t join posts p on p.id = t.id
       join users u on u.id = p.author_id and u.banned_at is null
+      where p.hidden_at is null
       order by t.depth, p.created_at, p.id
       limit ${THREAD_MAX_REPLIES + 1}
     `),
@@ -604,7 +607,7 @@ router.get("/:id/thread", async (req, res) => {
         .select(postSelection(viewerId))
         .from(posts)
         .innerJoin(users, eq(users.id, posts.authorId))
-        .where(and(inArray(posts.id, wanted), isNull(users.bannedAt)))
+        .where(and(inArray(posts.id, wanted), isNull(users.bannedAt), isNull(posts.hiddenAt)))
     : [];
   const byId = new Map(rows.map((row) => [row.id, serializePost(row)]));
   const pick = (ids: string[]) =>
@@ -647,7 +650,7 @@ router.put("/:id/poll/vote", async (req, res) => {
     const [post] = await tx
       .select({ poll: posts.poll })
       .from(posts)
-      .where(and(eq(posts.id, postId), visiblePostAuthor))
+      .where(and(eq(posts.id, postId), visiblePost))
       .for("update");
     if (!post?.poll) throw new AuthError(404, "poll_not_found");
     if (optionIndex >= post.poll.options.length)
@@ -683,7 +686,7 @@ router.get("/:id/poll/voters", async (req, res) => {
   const [post] = await db
     .select({ poll: posts.poll })
     .from(posts)
-    .where(and(eq(posts.id, req.params.id), visiblePostAuthor));
+    .where(and(eq(posts.id, req.params.id), visiblePost));
   if (!post?.poll) throw new AuthError(404, "poll_not_found");
   if (post.poll.anonymous) throw new AuthError(403, "poll_is_anonymous");
   const { options } = post.poll;
@@ -726,7 +729,8 @@ router.get("/:id/activity", async (req, res) => {
           .select({ ...userSelection, quoteId: posts.id })
           .from(posts)
           .innerJoin(users, eq(users.id, posts.authorId))
-          .where(and(eq(posts.quotedPostId, req.params.id), isNull(users.bannedAt), cursor ? gt(posts.id, cursor) : undefined))
+          .where(and(eq(posts.quotedPostId, req.params.id), isNull(users.bannedAt), isNull(posts.hiddenAt),
+            cursor ? gt(posts.id, cursor) : undefined))
           .orderBy(asc(posts.id))
           .limit(51)
       : type === "likes"
@@ -785,7 +789,7 @@ async function setLike(req: Request, liked: boolean) {
     const [post] = await tx
       .select({ id: posts.id, authorId: posts.authorId })
       .from(posts)
-      .where(and(eq(posts.id, id), visiblePostAuthor))
+      .where(and(eq(posts.id, id), visiblePost))
       .for("update");
     if (!post) throw new AuthError(404, "post_not_found");
     if (liked) await requireNotBlocked(tx, user.id, post.authorId);
@@ -837,7 +841,7 @@ async function setRepost(req: Request, reposted: boolean) {
     const [post] = await tx
       .select({ id: posts.id, authorId: posts.authorId, parentId: posts.parentId })
       .from(posts)
-      .where(and(eq(posts.id, id), visiblePostAuthor))
+      .where(and(eq(posts.id, id), visiblePost))
       .for("update");
     if (!post) throw new AuthError(404, "post_not_found");
     if (reposted) await requireNotBlocked(tx, user.id, post.authorId);
@@ -919,7 +923,7 @@ async function setSave(req: Request, saved: boolean) {
     const [post] = await tx
       .select({ id: posts.id, authorId: posts.authorId })
       .from(posts)
-      .where(and(eq(posts.id, id), visiblePostAuthor))
+      .where(and(eq(posts.id, id), visiblePost))
       .for("key share");
     if (!post) throw new AuthError(404, "post_not_found");
     if (saved) {
@@ -989,7 +993,7 @@ router.patch("/:id", async (req, res) => {
 });
 router.delete("/:id", async (req, res) => {
   const user = await requireUser(req);
-  const deleted = await db.transaction((tx) => removePost(tx, req.params.id, eq(posts.authorId, user.id)));
+  const deleted = await db.transaction((tx) => removePost(tx, req.params.id, { condition: eq(posts.authorId, user.id) }));
   if (!deleted) {
     await findPost(req.params.id);
     throw new AuthError(403, "not_post_author");
