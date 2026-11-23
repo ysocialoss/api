@@ -20,6 +20,7 @@ test("thread view, edit history and friend likes", async () => {
     Object.assign(process.env, {
       DATABASE_URL: url.href,
       NODE_ENV: "test",
+      ADMIN_ORIGIN: "http://localhost:3200",
       R2_ACCOUNT_ID: "a".repeat(32),
       R2_BUCKET: "thread-tests",
       R2_ACCESS_KEY_ID: "test",
@@ -33,10 +34,10 @@ test("thread view, edit history and friend likes", async () => {
     });
     const { env } = await import("../src/config.ts");
     const { hash } = await import("../src/auth/secrets.ts");
-    async function signIn(handle) {
+    async function signIn(handle, role = "user") {
       const { rows: [user] } = await pool.query(
-        "INSERT INTO users (handle, approved_at) VALUES ($1, now()) RETURNING id",
-        [handle],
+        "INSERT INTO users (handle, approved_at, role) VALUES ($1, now(), $2) RETURNING id",
+        [handle, role],
       );
       const { rows: [identity] } = await pool.query(
         "INSERT INTO auth_identities (issuer, subject, user_id) VALUES ('https://test.invalid', $1, $2) RETURNING id",
@@ -52,14 +53,16 @@ test("thread view, edit history and friend likes", async () => {
     const author = await signIn("thread_author");
     const friend = await signIn("thread_friend");
     const stranger = await signIn("thread_stranger");
+    const staff = await signIn("thread_admin", "admin");
+    const moderator = await signIn("thread_moderator", "moderator");
     server = app.listen(0, "127.0.0.1");
     await once(server, "listening");
     const base = `http://127.0.0.1:${server.address().port}`;
-    async function request(user, path, method = "GET", body) {
+    async function request(user, path, method = "GET", body, origin = env.APP_ORIGIN) {
       return fetch(base + path, {
         method,
         headers: {
-          Origin: env.APP_ORIGIN,
+          Origin: origin,
           ...(user ? { Cookie: `session=${user.token}` } : {}),
           "Content-Type": "application/json",
         },
@@ -111,6 +114,29 @@ test("thread view, edit history and friend likes", async () => {
     await json(author, `/api/posts/${root.id}`, "PATCH", { content: "root v3" });
     const { versions } = await json(null, `/api/posts/${root.id}/edits`);
     assert.deepEqual(versions.map((v) => v.content), ["root v3", "root v2", "root"]);
+
+    await pool.query("UPDATE posts SET created_at = now() - interval '1 hour' WHERE id = $1", [b.id]);
+    const adminPath = `/api/admin/posts/${b.id}`;
+    const editAsStaff = (editor, content) => request(editor, adminPath, "PATCH", { content }, env.ADMIN_ORIGIN);
+    assert.equal((await request(author, `/api/posts/${b.id}`, "PATCH", { content: "Too late" })).status, 409);
+    assert.equal((await editAsStaff(moderator, "Denied")).status, 403);
+    assert.equal((await request(staff, adminPath, "PATCH", { content: "Wrong origin" })).status, 403);
+    assert.equal((await editAsStaff(staff, " ")).status, 400);
+    assert.equal((await editAsStaff(staff, "x".repeat(2001))).status, 400);
+    const adminText = "Edited reply #updated @thread_friend";
+    assert.equal((await editAsStaff(staff, `  ${adminText}  `)).status, 204);
+    assert.equal((await editAsStaff(staff, adminText)).status, 204);
+    assert.deepEqual(
+      (await json(null, `/api/posts/${b.id}/edits`)).versions.map((v) => v.content), [adminText, "b"],
+    );
+    assert.deepEqual((await pool.query("SELECT topic FROM post_topics WHERE post_id = $1", [b.id])).rows,
+      [{ topic: "updated" }]);
+    assert.deepEqual((await pool.query("SELECT user_id FROM post_mentions WHERE post_id = $1", [b.id])).rows,
+      [{ user_id: friend.id }]);
+    assert.equal((await pool.query("SELECT 1 FROM notifications WHERE post_id = $1 AND kind = 'mention'", [b.id])).rowCount, 0);
+    assert.deepEqual((await pool.query(
+      "SELECT actor_id, target_handle FROM moderation_activity WHERE action = 'editPostText' AND target_id = $1", [b.id],
+    )).rows, [{ actor_id: staff.id, target_handle: "thread_author" }]);
 
     // Friends are mutual follows; only they show up under a post.
     const follow = (from, to) =>

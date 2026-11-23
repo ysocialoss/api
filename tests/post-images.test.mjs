@@ -256,6 +256,66 @@ test("screens and publishes image drafts, then moderates or cascades their remov
     assert.equal(reply.status, 201);
     const { post: replyPost } = await reply.json();
     assert.deepEqual(replyPost.imageIds, [third, second]);
+    const attachmentsPath = `/api/admin/posts/${replyPost.id}/attachments/images`;
+    const changeImage = (path, user = admin, body = image) => request(path, {
+      user, method: "POST", body, type: "application/octet-stream", filename: "admin-edit.png",
+    });
+    const readImages = async () => (await (await request(`/api/admin/post/${replyPost.id}`, { user: admin })).json()).imageIds;
+    const scansBeforeEdit = scanCount;
+    assert.equal((await changeImage(attachmentsPath, moderator)).status, 403);
+    assert.equal((await changeImage(attachmentsPath, admin, Buffer.from("<svg/>"))).status, 400);
+    assert.equal(scanCount, scansBeforeEdit);
+
+    assert.equal((await changeImage(attachmentsPath)).status, 204);
+    const addedImages = await readImages();
+    const added = addedImages[2];
+    assert.deepEqual(addedImages, [third, second, added]);
+    assert.ok(added);
+    const addedImage = await request(`/api/post-images/${added}`);
+    assert.equal(addedImage.headers.get("content-type"), "image/avif");
+    assert.deepEqual(Buffer.from(await addedImage.arrayBuffer()), scanned);
+
+    for (const [mode, status] of [["reject", 422], ["offline", 503]]) {
+      verdict = mode;
+      assert.equal((await changeImage(`${attachmentsPath}/${second}`)).status, status);
+      assert.deepEqual(await readImages(), addedImages);
+      assert.equal((await request(`/api/post-images/${second}`)).status, 200);
+    }
+    const { rows: [adminFlag] } = await pool.query(
+      "SELECT uploader_id, filename FROM post_image_flags WHERE filename = 'admin-edit.png'",
+    );
+    assert.deepEqual(adminFlag, { uploader_id: admin.id, filename: "admin-edit.png" });
+
+    verdict = "allow";
+    const additions = await Promise.all([changeImage(attachmentsPath), changeImage(attachmentsPath)]);
+    assert.deepEqual(additions.map((response) => response.status).sort(), [204, 409]);
+    const full = await readImages();
+    assert.equal(full.length, 4);
+    assert.equal((await changeImage(`${attachmentsPath}/${first}`)).status, 404);
+    assert.equal((await changeImage(`${attachmentsPath}/${second}`)).status, 204);
+    const updated = await readImages();
+    const replacement = updated[1];
+    assert.ok(replacement);
+    assert.notEqual(replacement, second);
+    assert.deepEqual(updated, [third, replacement, added, full[3]]);
+    assert.equal((await request(`/api/post-images/${second}`)).status, 404);
+    assert.deepEqual(Buffer.from(await (await request(`/api/post-images/${replacement}`)).arrayBuffer()), scanned);
+
+    const removeImage = (path, user = admin) => request(path, { user, method: "DELETE" });
+    assert.equal((await removeImage(`${attachmentsPath}/${replacement}`, moderator)).status, 403);
+    assert.equal((await removeImage(`${attachmentsPath}/${replacement}`)).status, 204);
+    assert.equal((await removeImage(`${attachmentsPath}/${replacement}`)).status, 204);
+    assert.equal((await request(`/api/post-images/${replacement}`)).status, 404);
+    assert.deepEqual(await readImages(), [third, added, full[3]]);
+    assert.equal((await removeImage(`/api/admin/posts/${clientId}/attachments/images/${first}`)).status, 409);
+    const { rows: imageActions } = await pool.query(
+      "SELECT action, count(*)::integer AS count FROM moderation_activity WHERE target_id = $1 GROUP BY action ORDER BY action",
+      [replyPost.id],
+    );
+    assert.deepEqual(imageActions, [
+      { action: "addImage", count: 2 }, { action: "removeImage", count: 1 }, { action: "replaceImage", count: 1 },
+    ]);
+
     const removeImages = (id, user) => request(`/api/admin/posts/${id}/attachments/images`, { user, method: "DELETE" });
     assert.equal((await removeImages(clientId, admin)).status, 409);
     assert.equal((await removeImages(replyPost.id, moderator)).status, 403);
