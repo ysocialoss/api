@@ -68,6 +68,10 @@ export function beginDraining() {
 }
 export const isDraining = () => draining;
 
+let readChecks: (() => Promise<Record<string, Check>>) | undefined;
+// Latest dependency probes (shared and cached with /health) for the admin system page.
+export const readHealthChecks = () => readChecks?.() ?? Promise.resolve(null);
+
 export function createHealthRouter(isStartupReady = () => true) {
   const router = Router();
   const database = cachedCheck(15_000, async () => {
@@ -135,6 +139,13 @@ export function createHealthRouter(isStartupReady = () => true) {
     await Promise.all(signingKeys.map((key) => importJWK(key, "RS256")));
     return "ok";
   });
+
+  readChecks = async () => {
+    const [dbResult, r2Result, klipyResult, cnsResult] = await Promise.all([
+      database(), r2(), klipy(), cns(),
+    ]);
+    return { database: dbResult, r2: r2Result, klipy: klipyResult, cns: cnsResult };
+  };
 
   router.use(["/live", "/ready", "/health"], (_req, res, next) => {
     res.set("Cache-Control", "no-store");
