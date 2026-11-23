@@ -1,9 +1,9 @@
 import type { PoolClient } from "pg";
 import { sweepUnusedMedia } from "./media-sweep.ts";
 import { DeleteObjectCommand } from "@aws-sdk/client-s3";
-import { and, desc, eq, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lte, or, sql } from "drizzle-orm";
 import { createDatabase, db, pool } from "../db/index.ts";
-import { avatarHistory, mediaDeletions, posts, users } from "../db/schema.ts";
+import { avatarHistory, mediaDeletions, moderationActivity, posts, users } from "../db/schema.ts";
 import { AuthError } from "../auth/provider.ts";
 import type { BannerCrop } from "./banner-crop.ts";
 import { avatarStorage, putAvatar } from "./r2.ts";
@@ -54,15 +54,30 @@ export async function queueDeletion(tx: Pick<typeof db, "insert">, key: string) 
     });
 }
 
-export async function replaceProfileMedia(userId: string, media: ProfileMedia) {
+export async function replaceProfileMedia(userId: string, media: ProfileMedia, adminId?: string) {
   let removed: string[] = [];
   try {
     removed = await db.transaction(async (tx) => {
-      const [user] = await tx
-        .select({ avatarKey: users.avatarKey, bannerKey: users.bannerKey })
+      const locked = await tx
+        .select({
+          id: users.id, handle: users.handle, role: users.role, bannedAt: users.bannedAt,
+          avatarKey: users.avatarKey, bannerKey: users.bannerKey,
+        })
         .from(users)
-        .where(eq(users.id, userId))
+        .where(inArray(users.id, adminId ? [adminId, userId] : [userId]))
+        .orderBy(users.id)
         .for("update");
+      const user = locked.find((row) => row.id === userId);
+      if (adminId) {
+        const actor = locked.find((row) => row.id === adminId);
+        if (actor?.role !== "admin" || actor.bannedAt)
+          throw new AuthError(403, "admin_required");
+        if (!user) throw new AuthError(404, "user_not_found");
+        await tx.insert(moderationActivity).values({
+          actorId: actor.id, actorHandle: actor.handle, targetId: user.id, targetHandle: user.handle,
+          action: media.kind === "avatar" ? "replaceAvatar" : "replaceBanner",
+        });
+      }
       if (!user) throw new AuthError(401, "sign_in_required");
       if (media.kind === "avatar") {
         if (media.fromRecent) {
