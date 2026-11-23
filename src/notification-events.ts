@@ -4,6 +4,7 @@ import {
   notifications,
   pushDeliveries,
   pushSubscriptions,
+  users,
 } from "./db/schema.ts";
 import { env } from "./config.ts";
 import { blockState } from "./blocks.ts";
@@ -15,16 +16,22 @@ type Event = Pick<
 >;
 
 // Call in the action's transaction. Failed or replayed actions never fan out.
-export async function recordNotification(tx: Transaction, event: Event) {
+export async function recordNotification(tx: Transaction, event: Event, { push = true } = {}) {
   if (event.recipientId === event.actorId) return;
   const state = await blockState(tx, event.recipientId, event.actorId);
   if (state.blocking || state.blockedBy) return;
+  const [recipient] = await tx.select({ mutedKinds: users.mutedNotificationKinds })
+    .from(users).where(eq(users.id, event.recipientId));
+  if (!recipient) return;
+  const muted = recipient.mutedKinds.includes(event.kind);
+  // Message notification rows also track unread messages inside conversations.
+  if (muted && !event.conversationId) return;
   const [saved] = await tx
     .insert(notifications)
     .values(event)
     .onConflictDoNothing()
     .returning({ id: notifications.id });
-  if (!saved || !env.PUSH) return;
+  if (!saved || !push || muted || !env.PUSH) return;
   const subscriptions = await tx
     .select({ id: pushSubscriptions.id })
     .from(pushSubscriptions)

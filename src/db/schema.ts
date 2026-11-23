@@ -26,6 +26,18 @@ import {
 
 export const userRole = pgEnum("user_role", ["admin", "moderator", "og", "user"]);
 
+export const notificationKind = pgEnum("notification_kind", [
+  "like",
+  "repost",
+  "reply",
+  "follow",
+  "mention",
+  "quote",
+  "dm_invite",
+  "dm_message",
+  "friends_repost",
+  "friend",
+]);
 export const moderationActivity = pgTable("moderation_activity", {
   id: uuid().defaultRandom().primaryKey(),
   actorId: uuid("actor_id").notNull(),
@@ -55,6 +67,7 @@ export const users = pgTable(
     dmGeneration: integer("dm_generation").notNull().default(1),
     dmOptedOut: boolean("dm_opted_out").notNull().default(false),
     hideNotificationContent: boolean("hide_notification_content").notNull().default(false),
+    mutedNotificationKinds: text("muted_notification_kinds").$type<(typeof notificationKind.enumValues)[number]>().array().notNull().default(sql`'{}'::text[]`),
     navigation: text().array(),
     avatarKey: text("avatar_key"),
     identityAvatarHidden: boolean("identity_avatar_hidden").notNull().default(false),
@@ -567,16 +580,6 @@ export const postMentions = pgTable("post_mentions", {
   handle: text().notNull(),
 }, (table) => [primaryKey({ columns: [table.postId, table.userId, table.handle] })]);
 
-export const notificationKind = pgEnum("notification_kind", [
-  "like",
-  "repost",
-  "reply",
-  "follow",
-  "mention",
-  "quote",
-  "dm_invite",
-  "dm_message",
-]);
 export const notifications = pgTable(
   "notifications",
   {
@@ -621,7 +624,7 @@ export const notifications = pgTable(
       "notifications_subject_check",
       sql`case
         when ${table.kind}::text in ('dm_invite', 'dm_message') then ${table.conversationId} is not null and ${table.postId} is null
-        when ${table.kind} = 'follow' then ${table.conversationId} is null and ${table.postId} is null
+        when ${table.kind}::text in ('follow', 'friend') then ${table.conversationId} is null and ${table.postId} is null
         else ${table.conversationId} is null and ${table.postId} is not null
       end`,
     ),

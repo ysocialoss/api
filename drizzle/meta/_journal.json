@@ -414,6 +414,13 @@
       "when": 1795436261068,
       "tag": "0058_navigation",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1795441409291,
+      "tag": "0059_notification_preferences",
+      "breakpoints": true
     }
   ]
 }

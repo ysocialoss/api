@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, exists, gt, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import express, { Router, type Request } from "express";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
@@ -38,6 +38,20 @@ const publicDevice = {
   revocation: dmDevices.revocation,
 };
 const certified = or(eq(dmDevices.root, true), isNotNull(dmDevices.approvedBy));
+const unreadMessageNotification = and(
+  isNull(notifications.readAt),
+  or(
+    eq(notifications.kind, "dm_message"),
+    and(
+      eq(notifications.kind, "dm_invite"),
+      // Older invites could be created without a message.
+      exists(db.select({ id: dmMessages.id }).from(dmMessages).where(and(
+        eq(dmMessages.conversationId, notifications.conversationId),
+        sql`${dmMessages.id}::text = ${notifications.subject}`,
+      ))),
+    ),
+  ),
+);
 const ownDevices = (userId: string) => eq(dmDevices.userId, userId);
 const currentDevices = sql`exists (
   select 1 from users where users.id = ${dmDevices.userId} and users.dm_generation = ${dmDevices.generation}
@@ -232,7 +246,7 @@ router.get("/conversations", async (req, res) => {
     id: notifications.conversationId,
     count: sql<number>`count(*)::int`.as("unread_count"),
   }).from(notifications).where(and(
-    eq(notifications.recipientId, viewer.id), eq(notifications.kind, "dm_message"), isNull(notifications.readAt),
+    eq(notifications.recipientId, viewer.id), unreadMessageNotification,
   )).groupBy(notifications.conversationId).as("dm_unread");
   const conversations = await db.select({
     id: dmConversations.id, peer: userSelection, lastMessageAt: dmConversations.lastMessageAt, ...inviteFields,
@@ -259,12 +273,14 @@ router.get("/conversations", async (req, res) => {
 router.get("/unread", async (req, res) => {
   const viewer = await requireApprovedUser(req);
   const [row] = await db.select({
-    unread: sql<number>`count(*) filter (where ${dmConversations.inviteStatus} <> 'declined')::int`,
+    unread: sql<number>`count(*) filter (where ${dmConversations.inviteStatus} <> 'declined'
+      and not (${notifications.kind}::text = any(${users.mutedNotificationKinds})))::int`,
     requests: sql<number>`count(distinct ${dmConversations.id}) filter (where ${dmConversations.inviteStatus} = 'pending')::int`,
   })
     .from(notifications)
     .innerJoin(dmConversations, eq(dmConversations.id, notifications.conversationId))
-    .where(and(eq(notifications.recipientId, viewer.id), eq(notifications.kind, "dm_message"), isNull(notifications.readAt)));
+    .innerJoin(users, eq(users.id, notifications.recipientId))
+    .where(and(eq(notifications.recipientId, viewer.id), unreadMessageNotification));
   res.json({ unread: row?.unread ?? 0, requests: row?.requests ?? 0 });
 });
 
@@ -524,7 +540,7 @@ router.put("/conversations/:id/read", async (req, res) => {
     requireActive(await readDevice(viewer.id, device.id, tx));
     const updated = await tx.update(notifications).set({ readAt: new Date() }).where(and(
       eq(notifications.recipientId, viewer.id), eq(notifications.conversationId, conversation.id),
-      eq(notifications.kind, "dm_message"), isNull(notifications.readAt),
+      inArray(notifications.kind, ["dm_message", "dm_invite"]), isNull(notifications.readAt),
       inArray(notifications.subject, delivered),
     )).returning({ id: notifications.id });
     if (updated.length) await publishDmChange(tx, viewer.id, { type: "conversation", id: conversation.id, roster: false, read: true });
@@ -587,9 +603,11 @@ router.post("/conversations/:id/messages", async (req, res) => {
     }
     await tx.update(dmConversations).set({ lastMessageAt: now, firstHiddenAt: null, secondHiddenAt: null }).where(eq(dmConversations.id, id));
     const recipientId = peerOf(conversation, viewer.id);
+    const pendingInvite = current.inviteStatus === "pending";
     await recordNotification(tx, {
-      recipientId, actorId: viewer.id, kind: "dm_message", conversationId: id, subject: input.id,
-    });
+      recipientId, actorId: viewer.id, kind: pendingInvite ? "dm_invite" : "dm_message",
+      conversationId: id, subject: input.id,
+    }, { push: !pendingInvite || !current.lastMessageAt });
     for (const userId of ids) await publishDmChange(tx, userId, { type: "conversation", id, roster: false });
   });
   res.sendStatus(204);
