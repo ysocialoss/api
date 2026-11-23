@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHmac, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -36,6 +37,34 @@ if (!live) {
 }
 
 await test("avatar upload, persistence, access, and failures", async (t) => {
+  let scanCount = 0;
+  let rejectScan = 0;
+  let scannerUnavailable = false;
+  const scanner = createServer(async (req, res) => {
+    try {
+      assert.equal(req.method, "POST");
+      assert.equal(req.url, "/v1/detect");
+      const form = await new Response(Readable.toWeb(req), {
+        headers: { "Content-Type": req.headers["content-type"] },
+      }).formData();
+      const image = form.get("file");
+      assert.equal(image.type, "image/avif");
+      assert.equal(Buffer.from(await image.arrayBuffer()).toString("ascii", 4, 12), "ftypavif");
+      scanCount++;
+      if (scannerUnavailable) {
+        res.writeHead(503).end();
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({
+        is_nsfw: scanCount === rejectScan, confidence_percentage: 97.5,
+      }));
+    } catch (error) {
+      res.writeHead(500).end(String(error));
+    }
+  }).listen(0, "127.0.0.1");
+  await once(scanner, "listening");
+  t.after(() => new Promise((resolve) => scanner.close(resolve)));
+  process.env.NSFW_CHECK_URL = `http://127.0.0.1:${scanner.address().port}`;
   await admin.query(`CREATE DATABASE ${databaseName}`);
   const { app } = await import("../src/app.ts");
   const { db, pool } = await import("../src/db/index.ts");
@@ -77,7 +106,7 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
           };
         }
         const key = decodeURIComponent(
-          request.path.match(/(?:avatars|banners|voices)\/.+$/)[0],
+          request.path.match(/(?:avatars|banners|voices|flagged-images)\/.+$/)[0],
         );
         if (request.method === "PUT") {
           if (failWrites) throw new Error("Simulated R2 outage");
@@ -728,8 +757,10 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
             .status,
           400,
         );
+        const scansBeforeStill = scanCount;
         const still = await uploadBanner(picture, "image/png");
         assert.equal(still.response.status, 200);
+        assert.equal(scanCount, scansBeforeStill + 1);
         assert.match(still.data.bannerUrl, /\.avif$/);
         const stillResponse = await fetch(`${origin}${still.data.bannerUrl}`);
         const stillBody = Buffer.from(await stillResponse.arrayBuffer());
@@ -740,7 +771,18 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
         const gif = await readFile(
           new URL("./fixtures/banner.gif", import.meta.url),
         );
-        const animated = await uploadBanner(gif, "image/gif");
+        const singleFrameGif = await sharp(gif, { pages: 1 }).gif().toBuffer();
+        rejectScan = scanCount + 1;
+        const rejected = await uploadBanner(singleFrameGif, "image/gif");
+        assert.equal(rejected.response.status, 422);
+        assert.equal(scanCount, rejectScan);
+        assert.equal((await fetch(`${origin}${still.data.bannerUrl}`)).status, 200);
+
+        const scansBeforeAnimation = scanCount;
+        scannerUnavailable = true;
+        const animated = await uploadBanner(gif, "image/gif").finally(() => {
+          scannerUnavailable = false;
+        });
         assert.equal(animated.response.status, 200);
         assert.match(animated.data.bannerUrl, /\.gif$/);
         const response = await fetch(`${origin}${animated.data.bannerUrl}`);
@@ -753,6 +795,7 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
         assert.equal(metadata.width, 450);
         assert.equal(metadata.pageHeight, 150);
         assert.equal(metadata.pages, 24);
+        assert.equal(scanCount, scansBeforeAnimation);
         const profile = await fetch(`${origin}/api/profiles/avatar_alice`).then(
           (res) => res.json(),
         );
@@ -958,6 +1001,20 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
         assert.match(served.headers.get("content-type"), /^image\//);
         await served.arrayBuffer();
         media[kind] = url;
+
+        rejectScan = scanCount + 1;
+        const rejected = await uploadForBob(kind);
+        assert.equal(rejected.status, 422);
+        assert.deepEqual(await rejected.json(), { error: "post_image_rejected" });
+
+        scannerUnavailable = true;
+        try {
+          const unavailable = await uploadForBob(kind);
+          assert.equal(unavailable.status, 503);
+          assert.deepEqual(await unavailable.json(), { error: "post_image_check_unavailable" });
+        } finally {
+          scannerUnavailable = false;
+        }
       }
 
       assert.equal((await uploadForBob("avatar", env.ADMIN_ORIGIN, Buffer.from("invalid"))).status, 400);
@@ -970,6 +1027,8 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
       const actor = await (await fetch(`${origin}/api/admin/user/${alice.id}`, { headers })).json();
       assert.equal(actor.avatarUrl, actorProfile.avatarUrl);
       assert.equal(actor.bannerUrl, actorProfile.bannerUrl);
+      const { rows: flags } = await pool.query("SELECT uploader_id FROM post_image_flags ORDER BY created_at");
+      assert.deepEqual(flags.map(({ uploader_id }) => uploader_id), [alice.id, alice.id, alice.id]);
       const { rows: activity } = await pool.query(
         "SELECT action FROM moderation_activity WHERE actor_id = $1 AND target_id = $2 ORDER BY action",
         [alice.id, bob.id],
@@ -979,6 +1038,8 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (live) {
+      const { rows: flags } = await pool.query("SELECT object_key FROM post_image_flags WHERE object_key IS NOT NULL");
+      uploaded.push(...flags.map(({ object_key }) => object_key));
       for (const key of uploaded)
         await avatarStorage.client.send(
           new DeleteObjectCommand({ Bucket: avatarStorage.bucket, Key: key }),

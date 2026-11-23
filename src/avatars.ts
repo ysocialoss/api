@@ -21,7 +21,7 @@ router.use((_req, res, next) => {
 router.put("/me", async (req, res) => {
   // Authenticate and check the origin before buffering any upload.
   const viewer = await requireUser(req);
-  const media = await stageAvatarUpload(req, res);
+  const media = await stageAvatarUpload(req, res, viewer.id);
   await replaceProfileMedia(viewer.id, media);
   res.json({ avatarUrl: `/api/${media.key}` });
 });
