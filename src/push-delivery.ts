@@ -46,6 +46,7 @@ export async function flushPushDeliveries(send = webpush.sendNotification) {
           subscription: pushSubscriptions,
           actor: userSelection,
           hideContent: recipient.hideNotificationContent,
+          mutedKinds: recipient.mutedNotificationKinds,
           content: posts.content,
           hasGif: sql<boolean>`${posts.gif} IS NOT NULL`,
           hasVoice: sql<boolean>`${posts.voice} IS NOT NULL`,
@@ -73,6 +74,7 @@ export async function flushPushDeliveries(send = webpush.sendNotification) {
       if (
         !event ||
         event.notification.readAt ||
+        event.mutedKinds.includes(event.notification.kind) ||
         event.subscription.mutedForever ||
         (event.subscription.mutedUntil &&
           event.subscription.mutedUntil > new Date()) ||

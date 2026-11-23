@@ -447,6 +447,73 @@ test("notifications flow from actions to a private inbox and durable push delive
       method: "PUT",
       body: subscription,
     });
+
+    const preferencePath = "/api/notifications/preferences";
+    const setPreference = (kind, enabled) => json(preferencePath, {
+      method: "PATCH", body: { kind, enabled },
+    });
+    assert.deepEqual(await json(preferencePath, { origin: null }), { mutedKinds: [] });
+    assert.equal((await request(preferencePath, { user: null })).status, 401);
+    assert.equal((await request(preferencePath, {
+      method: "PATCH", body: { kind: "anything", enabled: false },
+    })).status, 400);
+    await Promise.all([setPreference("like", false), setPreference("friends_repost", false)]);
+    assert.deepEqual(new Set((await json(preferencePath)).mutedKinds), new Set(["like", "friends_repost"]));
+    assert.deepEqual(await json(preferencePath, { user: actor }), { mutedKinds: [] });
+
+    const { rows: [newPost] } = await pool.query(
+      "INSERT INTO posts (author_id, content) VALUES ($1, 'Preferences test') RETURNING id",
+      [owner.id],
+    );
+    const extendedInbox = async () => (await json("/api/notifications?extendedKinds=true")).notifications;
+    const postKinds = async () => (await extendedInbox())
+      .filter((item) => item.postId === newPost.id).map((item) => item.kind);
+    assert.equal((await action(`/api/posts/${newPost.id}/like`)).status, 200);
+    assert.deepEqual(await postKinds(), []);
+    assert.equal((await pool.query("SELECT * FROM push_deliveries")).rowCount, 0);
+    assert.equal((await action(`/api/posts/${newPost.id}/like`, "DELETE")).status, 200);
+    await setPreference("like", true);
+    assert.equal((await action(`/api/posts/${newPost.id}/like`)).status, 200);
+    assert.deepEqual(await postKinds(), ["like"]);
+    await setPreference("like", false);
+    let mutedPushes = 0;
+    await flushPushDeliveries(async () => { mutedPushes++; });
+    assert.equal(mutedPushes, 0);
+    assert.equal((await pool.query("SELECT * FROM push_deliveries")).rowCount, 0);
+
+    await setPreference("follow", false);
+    assert.equal((await action(`/api/profiles/${owner.handle}/follow`, "PUT", stranger)).status, 200);
+    assert.ok(!(await extendedInbox()).some((item) => item.actor.id === stranger.id));
+    assert.equal((await action(`/api/profiles/${stranger.handle}/follow`, "PUT", owner)).status, 200);
+    assert.ok((await json("/api/notifications?extendedKinds=true", { user: stranger })).notifications
+      .some((item) => item.kind === "friend"));
+    await setPreference("friend", false);
+    assert.equal((await action(`/api/profiles/${owner.handle}/follow`, "DELETE", stranger)).status, 200);
+    assert.equal((await action(`/api/profiles/${owner.handle}/follow`, "PUT", stranger)).status, 200);
+    assert.ok(!(await extendedInbox()).some((item) => item.kind === "friend"));
+
+    const repost = (audience) => action(`/api/posts/${newPost.id}/repost`, "PUT", stranger, { audience });
+    assert.equal((await repost("friends")).status, 200);
+    assert.deepEqual(await postKinds(), ["like"]);
+    assert.equal((await repost("public")).status, 200);
+    assert.ok((await postKinds()).includes("repost"));
+    await setPreference("friends_repost", true);
+    assert.equal((await repost("friends")).status, 200);
+    assert.deepEqual(new Set(await postKinds()), new Set(["like", "friends_repost"]));
+    assert.equal((await repost("friends")).status, 200);
+    assert.equal((await postKinds()).filter((kind) => kind === "friends_repost").length, 1);
+    assert.ok((await json("/api/notifications")).notifications
+      .some((item) => item.kind === "repost" && item.postId === newPost.id));
+
+    await setPreference("mention", false);
+    const quoteResponse = await request("/api/posts", {
+      method: "POST", user: actor, body: { content: `Hey @${owner.handle}`, quotedPostId: newPost.id },
+    });
+    assert.equal(quoteResponse.status, 201, await quoteResponse.clone().text());
+    const { post: taggedQuote } = await quoteResponse.json();
+    assert.deepEqual((await extendedInbox()).filter((item) => item.postId === taggedQuote.id)
+      .map((item) => item.kind), ["quote"]);
+
     await pool.query("DELETE FROM auth_sessions WHERE token_hash = $1", [
       hash(owner.token),
     ]);

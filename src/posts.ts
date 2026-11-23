@@ -22,6 +22,7 @@ import {
   inArray,
   isNull,
   lt,
+  ne,
   or,
   sql,
 } from "drizzle-orm";
@@ -33,7 +34,6 @@ import {
   pollVotes,
   postLikes,
   notifications,
-  postMentions,
   postReposts,
   postSaves,
   postTopics,
@@ -197,11 +197,16 @@ async function createPost({
           subject: saved.id,
         });
       if (quotedAuthor && quotedAuthor !== userId) {
-        // Someone tagged in their own quote already gets a mention notification.
+        // A mention alert already covers this quote if the recipient received one.
         const [mentioned] = await tx
-          .select({ userId: postMentions.userId })
-          .from(postMentions)
-          .where(and(eq(postMentions.postId, saved.id), eq(postMentions.userId, quotedAuthor)))
+          .select({ id: notifications.id })
+          .from(notifications)
+          .where(and(
+            eq(notifications.recipientId, quotedAuthor),
+            eq(notifications.actorId, userId),
+            eq(notifications.kind, "mention"),
+            eq(notifications.subject, saved.id),
+          ))
           .limit(1);
         if (!mentioned)
           await recordNotification(tx, {
@@ -838,38 +843,44 @@ async function setRepost(req: Request, reposted: boolean) {
     if (reposted) await requireNotBlocked(tx, user.id, post.authorId);
     if (reposted) {
       // Reposting again with another audience switches the existing repost.
-      await tx
+      const [changed] = await tx
         .insert(postReposts)
         .values({ postId: id, userId: user.id, audience })
         .onConflictDoUpdate({
           target: [postReposts.postId, postReposts.userId],
           set: { audience },
-        });
+          setWhere: ne(postReposts.audience, audience),
+        })
+        .returning({ audience: postReposts.audience });
       // A friends-only repost must not tell a stranger about it.
       const [{ friends }] = (
         await tx.execute<{ friends: boolean }>(
           sql`select ${mutualFollowSql(user.id, sql`${post.authorId}::uuid`)} as friends`,
         )
       ).rows;
-      if (audience === "public" || friends)
-        await recordNotification(tx, {
-          recipientId: post.authorId,
-          actorId: user.id,
-          kind: "repost",
-          postId: id,
-          subject: id,
-        });
-      else
+      const kind = audience === "public" ? "repost" : "friends_repost";
+      const visible = audience === "public" || friends;
+      if (changed || !visible)
         await tx
           .delete(notifications)
           .where(
             and(
               eq(notifications.recipientId, post.authorId),
               eq(notifications.actorId, user.id),
-              eq(notifications.kind, "repost"),
+              inArray(notifications.kind, visible
+                ? [kind === "repost" ? "friends_repost" : "repost"]
+                : ["repost", "friends_repost"]),
               eq(notifications.subject, id),
             ),
           );
+      if (visible && changed)
+        await recordNotification(tx, {
+          recipientId: post.authorId,
+          actorId: user.id,
+          kind,
+          postId: id,
+          subject: id,
+        });
     } else {
       await tx
         .delete(postReposts)

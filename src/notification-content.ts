@@ -5,9 +5,11 @@ const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 const descriptions = {
   like: "liked your post",
   repost: "reposted your post",
+  friends_repost: "reposted your post to friends",
   quote: "quoted your post",
   reply: "replied to your post",
   follow: "followed you",
+  friend: "is now your friend",
   mention: "mentioned you in a post",
 };
 

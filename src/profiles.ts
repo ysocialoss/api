@@ -382,14 +382,25 @@ async function setFollow(req: Request, follow: boolean) {
   const handle = handleSchema.safeParse(req.params.handle);
   if (!handle.success) throw new AuthError(404, "profile_not_found");
   return db.transaction(async (tx) => {
-    // Serialize updates for this profile so retries return a consistent count.
     const [target] = await tx
       .select({ id: users.id })
       .from(users)
-      .where(eq(users.id, tx.select({ id: userHandles.userId }).from(userHandles).where(eq(userHandles.handle, handle.data))))
-      .for("no key update");
+      .where(eq(users.id, tx.select({ id: userHandles.userId }).from(userHandles).where(eq(userHandles.handle, handle.data))));
     if (!target) throw new AuthError(404, "profile_not_found");
     if (target.id === viewer.id) throw new AuthError(400, "cannot_follow_self");
+    // Follow backs can arrive concurrently. Lock both accounts in the same order.
+    await tx.select({ id: users.id }).from(users)
+      .where(inArray(users.id, [viewer.id, target.id])).orderBy(users.id).for("no key update");
+    const [followsViewer] = await tx
+      .select({ followerId: userFollows.followerId })
+      .from(userFollows)
+      .where(
+        and(
+          eq(userFollows.followerId, target.id),
+          eq(userFollows.followingId, viewer.id),
+        ),
+      )
+      .limit(1);
     if (follow) await requireNotBlocked(tx, viewer.id, target.id);
     if (follow) {
       const [inserted] = await tx
@@ -401,7 +412,7 @@ async function setFollow(req: Request, follow: boolean) {
         await recordNotification(tx, {
           recipientId: target.id,
           actorId: viewer.id,
-          kind: "follow",
+          kind: followsViewer ? "friend" : "follow",
           postId: null,
           subject: target.id,
         });
@@ -419,16 +430,6 @@ async function setFollow(req: Request, follow: boolean) {
       .select({ followerCount: sql<number>`count(*)::int` })
       .from(userFollows)
       .where(eq(userFollows.followingId, target.id));
-    const [followsViewer] = await tx
-      .select({ followerId: userFollows.followerId })
-      .from(userFollows)
-      .where(
-        and(
-          eq(userFollows.followerId, target.id),
-          eq(userFollows.followingId, viewer.id),
-        ),
-      )
-      .limit(1);
     return {
       isFollowing: follow,
       isFollowedBy: !!followsViewer,
