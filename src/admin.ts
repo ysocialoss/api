@@ -7,7 +7,7 @@ import adminReports, { openReportCount } from "./admin-reports.ts";
 import { db } from "./db/index.ts";
 import { authIdentities, githubConnections, moderationActivity, pollVotes, postImageFlags, postImages, posts, userRole, users } from "./db/schema.ts";
 import { githubProfileSelection, publicProfileSelection, userSelection } from "./user-data.ts";
-import { clearProfileMedia, flushMediaDeletions, queueDeletion } from "./storage/media-lifecycle.ts";
+import { clearProfileMedia, flushMediaDeletions, queueDeletion, replaceProfileMedia } from "./storage/media-lifecycle.ts";
 import { affectedPostIds, publishAccountChange, publishLiveChange, publishWaitlistChange } from "./live-events.ts";
 import { serveLiveStream } from "./live.ts";
 import { removePost } from "./post-removal.ts";
@@ -16,6 +16,7 @@ import { publishUserPostVisibility, removeUser } from "./user-removal.ts";
 import { badgeDetails, badgeIcons, badgePresets } from "./profile-badges.ts";
 import { pronounsSchema } from "./pronouns.ts";
 import { imageFlagCutoff, maxPostImages, postImageUploadBody, processPostImage, sendPostImage } from "./post-images.ts";
+import { stageAvatarUpload, stageBannerUpload } from "./storage/profile-upload.ts";
 import { getAvatar } from "./storage/r2.ts";
 import { randomUUID } from "node:crypto";
 
@@ -580,6 +581,19 @@ router.patch("/users/:id/profile", async (req, res) => {
     canEditRole: canModerateAccount(viewer, updated),
     canModerateAccount: canModerateAccount(viewer, updated),
   });
+});
+
+router.put("/users/:id/profile/:kind", async (req, res) => {
+  const viewer = await requireAdminWrite(req);
+  const id = z.uuid().safeParse(req.params.id);
+  if (!id.success) throw new AuthError(404, "user_not_found");
+  const { kind } = req.params;
+  if (kind !== "avatar" && kind !== "banner") throw new AuthError(404, "profile_media_not_found");
+  const media = kind === "avatar"
+    ? await stageAvatarUpload(req, res)
+    : await stageBannerUpload(req, res);
+  await replaceProfileMedia(id.data.toLowerCase(), media, viewer.id);
+  res.json({ url: `/api/${media.key}` });
 });
 
 const userIds = z.array(z.uuid()).min(1).max(pageSize);

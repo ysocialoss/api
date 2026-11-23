@@ -1,19 +1,17 @@
 import {
-  stageMediaUpload,
   replaceProfileMedia,
 } from "./storage/media-lifecycle.ts";
 import { bannerCropSchema } from "./storage/banner-crop.ts";
 import { searchGifs, selectedGifUrl } from "./storage/klipy.ts";
-import { randomUUID } from "node:crypto";
-import express, { Router } from "express";
+import { Router } from "express";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { requireUser } from "./auth/request.ts";
 import { AuthError } from "./auth/provider.ts";
 import { db } from "./db/index.ts";
 import { users } from "./db/schema.ts";
-import { bannerUploadLimit, normalizeBanner } from "./storage/banner-image.ts";
-import { getAvatar, requireAvatarStorage } from "./storage/r2.ts";
+import { stageBannerUpload } from "./storage/profile-upload.ts";
+import { getAvatar } from "./storage/r2.ts";
 
 const router = Router();
 router.use((_req, res, next) => {
@@ -51,41 +49,9 @@ router.post("/gifs", async (req, res) => {
 });
 router.put("/me", async (req, res) => {
   const viewer = await requireUser(req);
-  requireAvatarStorage();
-  if (
-    !req.is([
-      "image/png",
-      "image/jpeg",
-      "image/webp",
-      "image/gif",
-      "image/avif",
-    ])
-  )
-    throw new AuthError(415, "invalid_banner");
-  await new Promise<void>((resolve, reject) => {
-    express.raw({ type: () => true, limit: bannerUploadLimit })(
-      req,
-      res,
-      (error) => (error ? reject(error) : resolve()),
-    );
-  });
-  if (!Buffer.isBuffer(req.body)) throw new AuthError(400, "invalid_banner");
-  let crop;
-  try {
-    crop = bannerCropSchema.parse(JSON.parse(String(req.query.crop)));
-  } catch {
-    throw new AuthError(400, "invalid_banner_crop");
-  }
-  const image = await normalizeBanner(req.body);
-  const key = `banners/${randomUUID()}.${image.extension}`;
-  await stageMediaUpload(key, image.body, image.contentType);
-  await replaceProfileMedia(viewer.id, {
-    kind: "banner",
-    key,
-    url: null,
-    crop,
-  });
-  res.json({ bannerUrl: `/api/${key}` });
+  const media = await stageBannerUpload(req, res);
+  await replaceProfileMedia(viewer.id, media);
+  res.json({ bannerUrl: `/api/${media.key}` });
 });
 router.delete("/me", async (req, res) => {
   const viewer = await requireUser(req);
