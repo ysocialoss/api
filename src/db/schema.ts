@@ -55,6 +55,7 @@ export const users = pgTable(
     dmGeneration: integer("dm_generation").notNull().default(1),
     dmOptedOut: boolean("dm_opted_out").notNull().default(false),
     hideNotificationContent: boolean("hide_notification_content").notNull().default(false),
+    navigation: text().array(),
     avatarKey: text("avatar_key"),
     identityAvatarHidden: boolean("identity_avatar_hidden").notNull().default(false),
     bannerKey: text("banner_key"),

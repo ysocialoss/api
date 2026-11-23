@@ -92,6 +92,7 @@ export async function readSessionHash(tokenHash: string) {
             pronouns: users.pronouns,
             role: users.role,
             approvedAt: users.approvedAt,
+            navigation: users.navigation,
             ...banDetailsSelection,
             bannerCrop: users.bannerCrop,
             bannerUrl: sql<string | null>`case when ${users.bannerKey} is null then ${users.bannerExternalUrl} else '/api/' || ${users.bannerKey} end`,

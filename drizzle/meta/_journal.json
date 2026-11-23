@@ -400,6 +400,20 @@
       "when": 1795372972546,
       "tag": "0056_saves_pins_domains",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1795429028843,
+      "tag": "0057_desktop_navigation",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1795436261068,
+      "tag": "0058_navigation",
+      "breakpoints": true
     }
   ]
 }

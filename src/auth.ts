@@ -1,4 +1,4 @@
-import { cookie, requireOrigin, requireSessionUser } from "./auth/request.ts";
+import { cookie, requireOrigin, requireSessionUser, requireUser } from "./auth/request.ts";
 import { publishAccountChange, publishWaitlistChange } from "./live-events.ts";
 import { serveLiveStream } from "./live.ts";
 import { createHash } from "node:crypto";
@@ -169,6 +169,28 @@ router.get("/me", async (req, res) => {
       ? session.identity.username.toLowerCase()
       : "",
   });
+});
+const navigationItems = z.enum([
+  "feed", "search", "messages", "activity", "communities", "profile", "saved",
+]);
+const navigationInput = z.strictObject({
+  userId: z.uuid(),
+  items: z.array(navigationItems)
+    .max(navigationItems.options.length)
+    .refine((items) => new Set(items).size === items.length)
+    .nullable(),
+});
+
+router.put("/navigation", async (req, res) => {
+  const user = await requireUser(req);
+  const input = navigationInput.safeParse(req.body);
+  if (!input.success) throw new AuthError(400, "invalid_navigation");
+  if (input.data.userId !== user.id)
+    throw new AuthError(403, "retry_account_changed");
+  await db.update(users)
+    .set({ navigation: input.data.items })
+    .where(eq(users.id, user.id));
+  res.sendStatus(204);
 });
 router.get("/approval/live", async (req, res) => {
   const user = await requireSessionUser(req);
