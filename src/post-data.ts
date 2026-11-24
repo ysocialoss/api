@@ -1,10 +1,13 @@
 import { and, isNull, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { postLikes, postReposts, postSaves, posts, profilePins, users } from "./db/schema.ts";
-import { avatarUrlSelection, userSelection } from "./user-data.ts";
+import { avatarUrlSelection, paintJson, type UserPaint, userSelection } from "./user-data.ts";
 import type { PollDefinition } from "./poll-schema.ts";
 
 const previewAvatarUrl = avatarUrlSelection(alias(users, "u"));
+const previewPaint = paintJson(sql`u.paint_id`);
+
+type PostUser = { id: string; handle: string; displayName: string; avatarUrl: string | null; paint: UserPaint | null };
 
 export const visiblePost = and(isNull(posts.hiddenAt), sql`exists (
   select 1 from users visible_author
@@ -78,7 +81,7 @@ export type QuotedPost = {
   pollTitle: string | null;
   isQuote: boolean;
   mentions: { id: string; handle: string; username: string }[];
-  author: { id: string; handle: string; displayName: string; avatarUrl: string | null };
+  author: PostUser;
 };
 export type PostQuote = { state: "available"; post: QuotedPost } | { state: "unavailable" };
 export const quoteSelection = {
@@ -94,14 +97,15 @@ export const quoteSelection = {
         'mentions', (select coalesce(jsonb_agg(jsonb_build_object('id', mu.id, 'handle', mu.handle, 'username', qm.handle)), '[]'::jsonb)
           from post_mentions qm join users mu on mu.id = qm.user_id where qm.post_id = q.id),
         'author', jsonb_build_object('id', u.id, 'handle', u.handle, 'displayName', u.display_name,
-          'avatarUrl', ${previewAvatarUrl})
+          'avatarUrl', ${previewAvatarUrl}, 'paint', ${previewPaint})
       ))
       from posts q join users u on u.id = q.author_id where q.id = ${posts.quotedPostId} and q.hidden_at is null and u.banned_at is null
     ), jsonb_build_object('state', 'unavailable'))
   ) end`,
   // Who a reply answers, so a reply shown outside its thread still has context.
-  replyTo: sql<{ id: string; handle: string; displayName: string } | null>`(
-    select jsonb_build_object('id', pp.id, 'handle', pu.handle, 'displayName', pu.display_name)
+  replyTo: sql<{ id: string; handle: string; displayName: string; paint: UserPaint | null } | null>`(
+    select jsonb_build_object('id', pp.id, 'handle', pu.handle, 'displayName', pu.display_name,
+      'paint', ${paintJson(sql`pu.paint_id`)})
     from posts pp join users pu on pu.id = pp.author_id where pp.id = ${posts.parentId} and pp.hidden_at is null
   )`,
 };
@@ -141,11 +145,11 @@ export function friendLikeSelection(viewerId: string | null) {
         : sql<number>`(select count(*)::int from post_likes pl where ${friendLikeFilter(viewerId)})`,
     friendLikers:
       viewerId === null
-        ? sql<{ id: string; handle: string; displayName: string; avatarUrl: string | null }[]>`'[]'::json`
-        : sql<{ id: string; handle: string; displayName: string; avatarUrl: string | null }[]>`(
+        ? sql<PostUser[]>`'[]'::json`
+        : sql<PostUser[]>`(
             select coalesce(json_agg(t), '[]'::json) from (
               select u.id, u.handle, u.display_name as "displayName",
-                ${previewAvatarUrl} as "avatarUrl"
+                ${previewAvatarUrl} as "avatarUrl", ${previewPaint} as "paint"
               from post_likes pl join users u on u.id = pl.user_id
               where ${friendLikeFilter(viewerId)}
               order by u.handle

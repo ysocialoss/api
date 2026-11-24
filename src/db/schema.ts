@@ -3,6 +3,7 @@ import type { KlipyGif } from "../storage/klipy.ts";
 import type { PollDefinition } from "../poll-schema.ts";
 import type { ProfileBadge } from "../profile-badges.ts";
 import type { Voice } from "../storage/voice-selection.ts";
+import type { PaintDefinition } from "../paint-schema.ts";
 import { sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
@@ -76,6 +77,7 @@ export const users = pgTable(
     navigation: text().array(),
     avatarKey: text("avatar_key"),
     identityAvatarHidden: boolean("identity_avatar_hidden").notNull().default(false),
+    paintId: uuid("paint_id").references((): AnyPgColumn => paints.id, { onDelete: "set null" }),
     bannerKey: text("banner_key"),
     bannerCrop: jsonb("banner_crop").$type<BannerCrop>(),
     bannerExternalUrl: text("banner_external_url"),
@@ -758,3 +760,18 @@ export const pushDeliveries = pgTable(
     index("push_deliveries_due_idx").on(table.availableAt),
   ],
 );
+
+export const paints = pgTable("paints", {
+  id: uuid().defaultRandom().primaryKey(),
+  name: text().notNull().unique("paints_name_unique"),
+  definition: jsonb().$type<PaintDefinition>().notNull(),
+  isFree: boolean("is_free").notNull().default(false),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const userPaints = pgTable("user_paints", {
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  paintId: uuid("paint_id").notNull().references(() => paints.id, { onDelete: "cascade" }),
+  grantedAt: timestamp("granted_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [primaryKey({ columns: [table.userId, table.paintId] }), index("user_paints_paint_idx").on(table.paintId)]);

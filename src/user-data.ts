@@ -1,5 +1,6 @@
-import { getTableName, sql, type SQLWrapper, type Table } from "drizzle-orm";
-import { authIdentities, githubConnections, posts, userFollows, users } from "./db/schema.ts";
+import { getTableName, type SQL, sql, type SQLWrapper, type Table } from "drizzle-orm";
+import { authIdentities, githubConnections, paints, posts, userFollows, users } from "./db/schema.ts";
+import type { PaintDefinition } from "./paint-schema.ts";
 
 export const githubProfileSelection = {
   login: githubConnections.login,
@@ -17,11 +18,23 @@ export function avatarUrlSelection(user: AvatarUserTable) {
   return sql<string | null>`coalesce('/api/' || ${user.avatarKey}, case when not ${user.identityAvatarHidden} then (select ${authIdentities.picture} from ${authIdentities} where ${authIdentities.userId} = ${sql.identifier(getTableName(user))}.${sql.identifier(user.id.name)} and ${authIdentities.deletedAt} is null) end)`;
 }
 
+export type UserPaint = {
+  id: string;
+  name: string;
+  definition: PaintDefinition;
+};
+
+export function paintJson(paintId: SQL) {
+  const column = (name: string) => sql`p.${sql.identifier(name)}`;
+  return sql<UserPaint | null>`(select jsonb_build_object('id', ${column(paints.id.name)}, 'name', ${column(paints.name.name)}, 'definition', ${column(paints.definition.name)}) from ${paints} p where ${column(paints.id.name)} = ${paintId})`;
+}
+
 export const userSelection = {
   id: users.id,
   handle: users.handle,
   displayName: users.displayName,
   avatarUrl: avatarUrlSelection(users),
+  paint: paintJson(sql`${users}.${sql.identifier(users.paintId.name)}`),
 };
 
 export const banDetailsSelection = {

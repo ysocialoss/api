@@ -442,6 +442,20 @@
       "when": 1795458699757,
       "tag": "0062_connection_visibility",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1795524179282,
+      "tag": "0063_paints",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1795524179921,
+      "tag": "0064_seed_paints",
+      "breakpoints": true
     }
   ]
 }
