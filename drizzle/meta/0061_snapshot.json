@@ -1,5 +1,5 @@
 {
-  "id": "afdf2793-825c-436e-81f9-96f8eec8cb68",
+  "id": "9c0765f8-b180-4d04-afae-3fadf6f5fdac",
   "prevId": "f40f696b-ae69-461c-b017-25cd27e7149b",
   "version": "7",
   "dialect": "postgresql",
@@ -1458,6 +1458,69 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "moderation_activity_action_idx": {
+          "name": "moderation_activity_action_idx",
+          "columns": [
+            {
+              "expression": "action",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "moderation_activity_actor_idx": {
+          "name": "moderation_activity_actor_idx",
+          "columns": [
+            {
+              "expression": "actor_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "moderation_activity_target_idx": {
+          "name": "moderation_activity_target_idx",
+          "columns": [
+            {
+              "expression": "target_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -1716,67 +1779,6 @@
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.paints": {
-      "name": "paints",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "definition": {
-          "name": "definition",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "is_free": {
-          "name": "is_free",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "sort_order": {
-          "name": "sort_order",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "paints_name_unique": {
-          "name": "paints_name_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "name"
-          ]
-        }
-      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -3779,89 +3781,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.user_paints": {
-      "name": "user_paints",
-      "schema": "",
-      "columns": {
-        "user_id": {
-          "name": "user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "paint_id": {
-          "name": "paint_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "granted_at": {
-          "name": "granted_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "user_paints_paint_idx": {
-          "name": "user_paints_paint_idx",
-          "columns": [
-            {
-              "expression": "paint_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "user_paints_user_id_users_id_fk": {
-          "name": "user_paints_user_id_users_id_fk",
-          "tableFrom": "user_paints",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "user_paints_paint_id_paints_id_fk": {
-          "name": "user_paints_paint_id_paints_id_fk",
-          "tableFrom": "user_paints",
-          "tableTo": "paints",
-          "columnsFrom": [
-            "paint_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "user_paints_user_id_paint_id_pk": {
-          "name": "user_paints_user_id_paint_id_pk",
-          "columns": [
-            "user_id",
-            "paint_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.users": {
       "name": "users",
       "schema": "",
@@ -3994,12 +3913,6 @@
           "notNull": true,
           "default": false
         },
-        "paint_id": {
-          "name": "paint_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
         "banner_key": {
           "name": "banner_key",
           "type": "text",
@@ -4064,21 +3977,7 @@
           "with": {}
         }
       },
-      "foreignKeys": {
-        "users_paint_id_paints_id_fk": {
-          "name": "users_paint_id_paints_id_fk",
-          "tableFrom": "users",
-          "tableTo": "paints",
-          "columnsFrom": [
-            "paint_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "users_handle_unique": {

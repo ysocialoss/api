@@ -48,7 +48,12 @@ export const moderationActivity = pgTable("moderation_activity", {
   action: text().notNull(),
   detail: text(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-}, (table) => [index("moderation_activity_created_idx").on(table.createdAt.desc(), table.id.desc())]);
+}, (table) => [
+  index("moderation_activity_created_idx").on(table.createdAt.desc(), table.id.desc()),
+  index("moderation_activity_action_idx").on(table.action, table.createdAt.desc()),
+  index("moderation_activity_actor_idx").on(table.actorId, table.createdAt.desc()),
+  index("moderation_activity_target_idx").on(table.targetId, table.createdAt.desc()),
+]);
 
 export const users = pgTable(
   "users",
@@ -228,6 +233,7 @@ export const connections = pgTable("connections", {
   username: text().notNull(),
   displayName: text("display_name").notNull(),
   profileUrl: text("profile_url").notNull(),
+  displayOnProfile: boolean("display_on_profile").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   unique("connections_user_provider_unique").on(table.userId, table.provider),
@@ -241,6 +247,7 @@ export const userDomains = pgTable("user_domains", {
   domain: text().notNull(),
   token: text().notNull(),
   verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  displayOnProfile: boolean("display_on_profile").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   unique("user_domains_user_domain_unique").on(table.userId, table.domain),
@@ -255,6 +262,7 @@ export const githubConnections = pgTable("github_connections", {
   githubId: text("github_id").notNull().unique(),
   login: text().notNull(),
   contributionCount: integer("contribution_count"),
+  displayOnProfile: boolean("display_on_profile").notNull().default(true),
   checkedAt: timestamp("checked_at", { withTimezone: true }),
   attemptedAt: timestamp("attempted_at", { withTimezone: true }),
 }, (table) => [

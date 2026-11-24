@@ -49,7 +49,7 @@ router.post("/gifs", async (req, res) => {
 });
 router.put("/me", async (req, res) => {
   const viewer = await requireUser(req);
-  const media = await stageBannerUpload(req, res);
+  const media = await stageBannerUpload(req, res, viewer.id);
   await replaceProfileMedia(viewer.id, media);
   res.json({ bannerUrl: `/api/${media.key}` });
 });

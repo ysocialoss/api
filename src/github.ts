@@ -12,8 +12,10 @@ import { githubProfileSelection } from "./user-data.ts";
 
 const router = Router();
 const attemptLength = 10 * 60_000;
-const connectInput = z.strictObject({ returnTo: z.literal("profile").optional() }).optional();
+const connectInput = z.strictObject({ returnTo: z.enum(["profile", "settings"]).optional() }).optional();
 const profileStatePrefix = "profile.";
+const settingsStatePrefix = "settings.";
+const githubSettingsSelection = { ...githubProfileSelection, displayOnProfile: githubConnections.displayOnProfile };
 
 router.use((_req, res, next) => {
   res.set({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
@@ -22,7 +24,7 @@ router.use((_req, res, next) => {
 
 router.get("/", async (req, res) => {
   const { id } = await requireApprovedUser(req);
-  const [github] = await db.select(githubProfileSelection).from(githubConnections)
+  const [github] = await db.select(githubSettingsSelection).from(githubConnections)
     .where(eq(githubConnections.userId, id));
   res.json({ configured: githubConfigured, github: github ?? null });
 });
@@ -32,7 +34,9 @@ router.post("/connect", async (req, res) => {
   if (!githubConfigured) throw new AuthError(503, "github_not_configured");
   const input = connectInput.safeParse(req.body);
   if (!input.success) throw new AuthError(400, "invalid_github_connection");
-  const state = (input.data?.returnTo === "profile" ? profileStatePrefix : "") + random();
+  const returnTo = input.data?.returnTo;
+  const prefix = returnTo === "profile" ? profileStatePrefix : returnTo === "settings" ? settingsStatePrefix : "";
+  const state = prefix + random();
   const verifier = random();
   const attempt = {
     stateHash: hash(state),
@@ -58,7 +62,7 @@ router.get("/callback", async (req, res) => {
   try {
     if (!githubConfigured) throw new AuthError(503, "github_not_configured");
     const { id, handle } = await requireApprovedUser(req);
-    const state = z.string().regex(/^(?:profile\.)?[\w-]{43}$/).safeParse(req.query.state);
+    const state = z.string().regex(/^(?:(?:profile|settings)\.)?[\w-]{43}$/).safeParse(req.query.state);
     if (!state.success) throw new AuthError(400, "github_invalid_state");
     const matchingAttempt = () => and(
       eq(githubLinkAttempts.userId, id),
@@ -71,6 +75,7 @@ router.get("/callback", async (req, res) => {
     if (!attempt) throw new AuthError(400, "github_invalid_state");
     // The stored state hash binds the return destination to this session.
     if (state.data.startsWith(profileStatePrefix)) returnPath = `/@${handle}`;
+    if (state.data.startsWith(settingsStatePrefix)) returnPath = "/settings/account";
 
     if (req.query.error === "access_denied") {
       await db.delete(githubLinkAttempts).where(matchingAttempt());
@@ -108,6 +113,16 @@ router.get("/callback", async (req, res) => {
       ? error.code
       : "github_connection_failed");
   }
+});
+
+router.patch("/", async (req, res) => {
+  const { id } = await requireUser(req);
+  const input = z.strictObject({ displayOnProfile: z.boolean() }).safeParse(req.body);
+  if (!input.success) throw new AuthError(400, "invalid_github_connection");
+  const [github] = await db.update(githubConnections).set(input.data)
+    .where(eq(githubConnections.userId, id)).returning(githubSettingsSelection);
+  if (!github) throw new AuthError(404, "github_not_connected");
+  res.json({ github });
 });
 
 router.delete("/", async (req, res) => {

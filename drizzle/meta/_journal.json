@@ -432,15 +432,29 @@
     {
       "idx": 61,
       "version": "7",
-      "when": 1795456255010,
-      "tag": "0061_paints",
+      "when": 1795457769447,
+      "tag": "0061_moderation_activity_filters",
       "breakpoints": true
     },
     {
       "idx": 62,
       "version": "7",
-      "when": 1795456255331,
-      "tag": "0062_seed_paints",
+      "when": 1795458699757,
+      "tag": "0062_connection_visibility",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1795524179282,
+      "tag": "0063_paints",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1795524179921,
+      "tag": "0064_seed_paints",
       "breakpoints": true
     }
   ]

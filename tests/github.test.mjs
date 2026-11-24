@@ -157,6 +157,8 @@ test("GitHub links are session-bound and publish only verified contribution data
     assert.equal(invalidReturn.status, 400);
     const cancelledPath = (await connect(owner.headers, "profile")).replace("code=test-code", "error=access_denied");
     assert.equal(await callback(cancelledPath, owner.headers), "/@github_owner?github=cancelled");
+    const settingsPath = (await connect(owner.headers, "settings")).replace("code=test-code", "error=access_denied");
+    assert.equal(await callback(settingsPath, owner.headers), "/settings/account?github=cancelled");
     const path = await connect(owner.headers, "profile");
     assert.equal(await callback(path, staff.headers), "/asettings?github=github_invalid_state");
     assert.equal(exchanged, 0);

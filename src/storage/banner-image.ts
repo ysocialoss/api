@@ -1,10 +1,12 @@
 import sharp, { type Metadata } from "sharp";
 import { AuthError } from "../auth/provider.ts";
+import { isAnimatedPng } from "./animated-png.ts";
 
 export const bannerUploadLimit = 10 * 1024 * 1024;
 const stillMaxSide = 1600;
 const animatedMaxWidth = 960;
 const animatedKeepBytes = 1024 * 1024;
+const limitInputPixels = 40_000_000;
 
 type Banner = { body: Buffer; extension: string; contentType: string };
 
@@ -19,7 +21,7 @@ async function compress(
       return null;
     const body = await sharp(input, {
       animated: true,
-      limitInputPixels: 40_000_000,
+      limitInputPixels,
       failOn: "warning",
     })
       .resize({ width: animatedMaxWidth, withoutEnlargement: true })
@@ -28,7 +30,7 @@ async function compress(
     return { body, extension: "webp", contentType: "image/webp" };
   }
   const body = await sharp(input, {
-    limitInputPixels: 40_000_000,
+    limitInputPixels,
     failOn: "warning",
   })
     .rotate()
@@ -43,14 +45,14 @@ async function compress(
   return { body, extension: "avif", contentType: "image/avif" };
 }
 
-export async function normalizeBanner(input: Buffer): Promise<Banner> {
+export async function normalizeBanner(input: Buffer): Promise<Banner & { animated: boolean }> {
   if (!input.length || input.length > bannerUploadLimit)
     throw new AuthError(400, "invalid_banner");
   let metadata: Metadata;
   try {
     const image = sharp(input, {
       animated: true,
-      limitInputPixels: 40_000_000,
+      limitInputPixels,
       failOn: "warning",
     });
     metadata = await image.metadata();
@@ -63,8 +65,11 @@ export async function normalizeBanner(input: Buffer): Promise<Banner> {
   } catch {
     throw new AuthError(400, "invalid_banner");
   }
-  const original: Banner = {
+  const animated = (metadata.pages ?? 1) > 1 ||
+    (metadata.format === "png" && isAnimatedPng(input));
+  const original = {
     body: input,
+    animated,
     extension:
       metadata.format === "heif"
         ? "avif"
@@ -80,8 +85,20 @@ export async function normalizeBanner(input: Buffer): Promise<Banner> {
   };
   try {
     const compressed = await compress(input, metadata);
-    if (compressed && compressed.body.length < input.length) return compressed;
+    if (compressed && compressed.body.length < input.length) return { ...compressed, animated };
   } catch {
   }
   return original;
+}
+
+export async function bannerScreeningImage(body: Buffer) {
+  try {
+    return await sharp(body, { limitInputPixels, failOn: "warning" })
+      .autoOrient()
+      .resize({ width: 768, height: 768, fit: "inside", withoutEnlargement: true })
+      .avif({ effort: 1 })
+      .toBuffer();
+  } catch {
+    throw new AuthError(400, "invalid_banner");
+  }
 }

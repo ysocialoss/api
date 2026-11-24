@@ -68,6 +68,10 @@ export function beginDraining() {
 }
 export const isDraining = () => draining;
 
+let readChecks: (() => Promise<Record<string, Check>>) | undefined;
+// Latest dependency probes (shared and cached with /health) for the admin system page.
+export const readHealthChecks = () => readChecks?.() ?? Promise.resolve(null);
+
 export function createHealthRouter(isStartupReady = () => true) {
   const router = Router();
   const database = cachedCheck(15_000, async () => {
@@ -136,6 +140,13 @@ export function createHealthRouter(isStartupReady = () => true) {
     return "ok";
   });
 
+  readChecks = async () => {
+    const [dbResult, r2Result, klipyResult, cnsResult] = await Promise.all([
+      database(), r2(), klipy(), cns(),
+    ]);
+    return { database: dbResult, r2: r2Result, klipy: klipyResult, cns: cnsResult };
+  };
+
   router.use(["/live", "/ready", "/health"], (_req, res, next) => {
     res.set("Cache-Control", "no-store");
     next();
@@ -159,17 +170,31 @@ export function createHealthRouter(isStartupReady = () => true) {
       checks: { database: result },
     });
   });
-  router.get("/health", async (_req, res) => {
+  async function overall() {
     const [dbResult, r2Result, klipyResult, cnsResult] = await Promise.all([
       database(), r2(), klipy(), cns(),
     ]);
     const checks = { database: dbResult, r2: r2Result, klipy: klipyResult, cns: cnsResult };
     const ready = !draining && isStartupReady() && dbResult.status === "ok";
+    const status = !ready ? "unavailable" : Object.values(checks).every(
+      (check) => check.status === "ok",
+    ) ? "ok" : "degraded";
+    return { checks, ready, status };
+  }
+  router.get("/health", async (_req, res) => {
+    const { checks, ready, status } = await overall();
+    res.status(ready ? 200 : 503).json({ status, checks });
+  });
+  // Public, minimal view for external uptime monitors. Shares the cached probes
+  // with /health and omits latency, timestamps, and error detail.
+  router.get("/api/status", async (_req, res) => {
+    res.set("Cache-Control", "no-store");
+    const { checks, ready, status } = await overall();
     res.status(ready ? 200 : 503).json({
-      status: !ready ? "unavailable" : Object.values(checks).every(
-        (check) => check.status === "ok",
-      ) ? "ok" : "degraded",
-      checks,
+      status,
+      components: Object.fromEntries(
+        Object.entries(checks).map(([name, check]) => [name, check.status]),
+      ),
     });
   });
   return router;

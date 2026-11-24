@@ -41,6 +41,7 @@ const connectionSelection = {
   username: connections.username,
   displayName: connections.displayName,
   profileUrl: connections.profileUrl,
+  displayOnProfile: connections.displayOnProfile,
 };
 
 router.get("/twitch/live", async (req, res) => {
@@ -48,7 +49,6 @@ router.get("/twitch/live", async (req, res) => {
     .pipe(z.array(z.string().regex(/^[a-z0-9_]{3,32}$/)).min(1).max(50))
     .safeParse(req.query.handles);
   if (!handles.success) throw new AuthError(400, "invalid_handles");
-  res.set("Cache-Control", "public, max-age=30");
   res.json({ live: await liveTwitchStreams(handles.data) });
 });
 
@@ -179,6 +179,18 @@ router.get("/:provider/callback", async (req, res) => {
       ? error.code.replace(/^connection_/, "")
       : "failed");
   }
+});
+
+router.patch("/:provider", async (req, res) => {
+  const provider = parseProvider(req.params.provider);
+  const { id } = await requireUser(req);
+  const input = z.strictObject({ displayOnProfile: z.boolean() }).safeParse(req.body);
+  if (!input.success) throw new AuthError(400, "invalid_connection");
+  const [connection] = await db.update(connections).set(input.data)
+    .where(and(eq(connections.userId, id), eq(connections.provider, provider)))
+    .returning(connectionSelection);
+  if (!connection) throw new AuthError(404, "unknown_connection");
+  res.json({ connection });
 });
 
 router.delete("/:provider", async (req, res) => {
