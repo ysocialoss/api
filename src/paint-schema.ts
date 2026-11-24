@@ -14,6 +14,7 @@ export const paintDefinitionSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("linear"),
     angle: z.number().min(0).max(360),
+    interpolation: z.literal("step").optional(),
     stops: paintStopsSchema,
   }),
   z.strictObject({
