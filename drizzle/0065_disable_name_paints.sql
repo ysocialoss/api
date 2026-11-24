@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "name_paints_disabled" boolean DEFAULT false NOT NULL;
