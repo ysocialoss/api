@@ -192,18 +192,24 @@ router.put("/navigation", async (req, res) => {
     .where(eq(users.id, user.id));
   res.sendStatus(204);
 });
-router.put("/name-paints", async (req, res) => {
-  requireOrigin(req);
-  const user = await requireSessionUser(req);
-  const input = z.strictObject({ userId: z.uuid(), disabled: z.boolean() }).safeParse(req.body);
-  if (!input.success) throw new AuthError(400, "invalid_name_paint_preference");
-  if (input.data.userId !== user.id)
-    throw new AuthError(403, "retry_account_changed");
-  await db.update(users)
-    .set({ namePaintsDisabled: input.data.disabled })
-    .where(eq(users.id, user.id));
-  res.sendStatus(204);
-});
+const namePaintPreferenceInput = z.strictObject({ userId: z.uuid(), disabled: z.boolean() });
+for (const [path, preference] of [
+  ["/name-paints", "namePaintsDisabled"],
+  ["/name-paint-animations", "namePaintAnimationsDisabled"],
+] as const) {
+  router.put(path, async (req, res) => {
+    requireOrigin(req);
+    const user = await requireSessionUser(req);
+    const input = namePaintPreferenceInput.safeParse(req.body);
+    if (!input.success) throw new AuthError(400, "invalid_name_paint_preference");
+    if (input.data.userId !== user.id)
+      throw new AuthError(403, "retry_account_changed");
+    await db.update(users)
+      .set({ [preference]: input.data.disabled })
+      .where(eq(users.id, user.id));
+    res.sendStatus(204);
+  });
+}
 router.get("/approval/live", async (req, res) => {
   const user = await requireSessionUser(req);
   serveLiveStream(req, res, { approvalFor: user.id });

@@ -79,6 +79,7 @@ export const users = pgTable(
     identityAvatarHidden: boolean("identity_avatar_hidden").notNull().default(false),
     paintId: uuid("paint_id").references((): AnyPgColumn => paints.id, { onDelete: "set null" }),
     namePaintsDisabled: boolean("name_paints_disabled").notNull().default(false),
+    namePaintAnimationsDisabled: boolean("name_paint_animations_disabled").notNull().default(false),
     bannerKey: text("banner_key"),
     bannerCrop: jsonb("banner_crop").$type<BannerCrop>(),
     bannerExternalUrl: text("banner_external_url"),

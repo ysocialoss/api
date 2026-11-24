@@ -470,6 +470,13 @@
       "when": 1795555994328,
       "tag": "0066_seed_pride_paints",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1795562093433,
+      "tag": "0067_disable_name_paint_animations",
+      "breakpoints": true
     }
   ]
 }
