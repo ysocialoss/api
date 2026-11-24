@@ -1,0 +1,13 @@
+INSERT INTO "paints" ("name", "definition", "is_free", "sort_order") VALUES
+  ('Rainbow Pride', '{"kind":"linear","angle":90,"interpolation":"step","stops":[{"color":"#e40303","at":0},{"color":"#ff8c00","at":0.1667},{"color":"#ffed00","at":0.3333},{"color":"#008026","at":0.5},{"color":"#004dff","at":0.6667},{"color":"#750787","at":0.8333}]}', true, 140),
+  ('Transgender Pride', '{"kind":"linear","angle":90,"interpolation":"step","stops":[{"color":"#5bcefa","at":0},{"color":"#f5a9b8","at":0.2},{"color":"#ffffff","at":0.4},{"color":"#f5a9b8","at":0.6},{"color":"#5bcefa","at":0.8}]}', true, 150),
+  ('Bisexual Pride', '{"kind":"linear","angle":90,"interpolation":"step","stops":[{"color":"#d60270","at":0},{"color":"#9b4f96","at":0.4},{"color":"#0038a8","at":0.6}]}', true, 160),
+  ('Lesbian Pride', '{"kind":"linear","angle":90,"interpolation":"step","stops":[{"color":"#d52d00","at":0},{"color":"#ef7627","at":0.1429},{"color":"#ff9a56","at":0.2857},{"color":"#ffffff","at":0.4286},{"color":"#d162a4","at":0.5714},{"color":"#b55690","at":0.7143},{"color":"#a30262","at":0.8571}]}', true, 170),
+  ('Gay Men’s Pride', '{"kind":"linear","angle":90,"interpolation":"step","stops":[{"color":"#078d70","at":0},{"color":"#26ceaa","at":0.1429},{"color":"#98e8c1","at":0.2857},{"color":"#ffffff","at":0.4286},{"color":"#7bade2","at":0.5714},{"color":"#5049cc","at":0.7143},{"color":"#3d1a78","at":0.8571}]}', true, 180),
+  ('Pansexual Pride', '{"kind":"linear","angle":90,"interpolation":"step","stops":[{"color":"#ff218c","at":0},{"color":"#ffd800","at":0.3333},{"color":"#21b1ff","at":0.6667}]}', true, 190),
+  ('Nonbinary Pride', '{"kind":"linear","angle":90,"interpolation":"step","stops":[{"color":"#fff430","at":0},{"color":"#ffffff","at":0.25},{"color":"#9c59d1","at":0.5},{"color":"#2c2c2c","at":0.75}]}', true, 200),
+  ('Asexual Pride', '{"kind":"linear","angle":90,"interpolation":"step","stops":[{"color":"#000000","at":0},{"color":"#a3a3a3","at":0.25},{"color":"#ffffff","at":0.5},{"color":"#800080","at":0.75}]}', true, 210),
+  ('Aromantic Pride', '{"kind":"linear","angle":90,"interpolation":"step","stops":[{"color":"#3da542","at":0},{"color":"#a7d379","at":0.2},{"color":"#ffffff","at":0.4},{"color":"#a9a9a9","at":0.6},{"color":"#000000","at":0.8}]}', true, 220),
+  ('Genderfluid Pride', '{"kind":"linear","angle":90,"interpolation":"step","stops":[{"color":"#ff76a4","at":0},{"color":"#ffffff","at":0.2},{"color":"#c011d7","at":0.4},{"color":"#000000","at":0.6},{"color":"#2f3cbe","at":0.8}]}', true, 230),
+  ('Genderqueer Pride', '{"kind":"linear","angle":90,"interpolation":"step","stops":[{"color":"#b57edc","at":0},{"color":"#ffffff","at":0.3333},{"color":"#4a8123","at":0.6667}]}', true, 240)
+ON CONFLICT ("name") DO NOTHING;

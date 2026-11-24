@@ -456,6 +456,20 @@
       "when": 1795524179921,
       "tag": "0064_seed_paints",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1795555764847,
+      "tag": "0065_disable_name_paints",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1795555994328,
+      "tag": "0066_seed_pride_paints",
+      "breakpoints": true
     }
   ]
 }
