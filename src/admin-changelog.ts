@@ -44,6 +44,8 @@ router.post("/releases", async (req, res) => {
       .set({ releaseId: release.id, publishedAt: sql`now()` })
       .where(and(eq(changelogEntries.app, input.data.app), isNull(changelogEntries.releaseId)))
       .returning({ id: changelogEntries.id });
+    // Rolls back the release row too, so an empty promote leaves no trace.
+    if (shipped.length === 0) throw new AuthError(409, "release_empty");
     return { id: release.id, entries: shipped.length };
   });
   res.status(201).json(result);
