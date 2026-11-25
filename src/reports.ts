@@ -5,6 +5,7 @@ import { AuthError } from "./auth/provider.ts";
 import { requireUser } from "./auth/request.ts";
 import { db } from "./db/index.ts";
 import { dmConversations, dmMessages, posts, reports, users, type ReportSnapshot } from "./db/schema.ts";
+import { readFeedContext, recordFeedEvent } from "./ranking/events.ts";
 import { avatarUrlSelection, publicProfileSelection } from "./user-data.ts";
 
 export const reportReasons = [
@@ -158,6 +159,14 @@ router.post("/", async (req, res) => {
     details,
     snapshot: resolved.snapshot,
   }).onConflictDoNothing().returning({ id: reports.id });
+  if (created && target.type !== "message")
+    await db.transaction((tx) => recordFeedEvent(tx, {
+      userId: viewer.id,
+      type: "report",
+      postId: target.type === "post" ? resolved.key : null,
+      authorId: resolved.userId,
+      context: readFeedContext(req),
+    }));
   res.status(created ? 201 : 200).json({ status: created ? "reported" : "already_reported" });
 });
 

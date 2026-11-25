@@ -173,6 +173,32 @@ async function moderation() {
   };
 }
 
+async function feedData() {
+  const [totals] = await rows<Record<string, string>>(sql`
+    select
+      (select count(*) from feed_events) as events,
+      (select count(*) from feed_events where created_at >= now() - interval '1 day') as events_24h,
+      (select count(distinct user_id) from feed_events where origin = 'client' and created_at >= now() - interval '7 days') as tracked_7d,
+      (select count(*) from users where not feed_personalize) as opted_out`);
+  const byType = await rows<{ type: string; count: string }>(sql`
+    select type, count(*) as count from feed_events
+    where created_at >= now() - interval '1 day'
+    group by type order by count(*) desc, type`);
+  const byDay = await rows<{ day: string; count: string }>(sql`
+    select to_char(d, 'YYYY-MM-DD') as day, count(e.id) as count
+    from generate_series(date_trunc('day', now()) - interval '13 days', date_trunc('day', now()), interval '1 day') d
+    left join feed_events e on e.origin <> 'backfill' and e.created_at >= d and e.created_at < d + interval '1 day'
+    group by d order by d`);
+  return {
+    events: num(totals.events),
+    events24h: num(totals.events_24h),
+    trackedUsers7d: num(totals.tracked_7d),
+    personalizationOff: num(totals.opted_out),
+    byType24h: byType.map((row) => ({ type: row.type, count: num(row.count) })),
+    eventsByDay: byDay.map((row) => ({ day: row.day, count: num(row.count) })),
+  };
+}
+
 function runtime() {
   const memory = process.memoryUsage();
   const ms = (nanoseconds: number) => Math.round(nanoseconds / 1e4) / 100;
@@ -213,13 +239,14 @@ const router = Router();
 
 router.get("/", async (req, res) => {
   await requireStaff(req);
-  const [checks, nsfw, databaseInfo, queueInfo, communityInfo, moderationInfo] = await Promise.all([
+  const [checks, nsfw, databaseInfo, queueInfo, communityInfo, moderationInfo, feedInfo] = await Promise.all([
     section(readHealthChecks),
     probeNsfw(),
     section(database),
     section(queues),
     section(community),
     section(moderation),
+    section(feedData),
   ]);
   res.json({
     generatedAt: new Date().toISOString(),
@@ -230,6 +257,7 @@ router.get("/", async (req, res) => {
     queues: queueInfo,
     community: communityInfo,
     moderation: moderationInfo,
+    feed: feedInfo,
   });
 });
 

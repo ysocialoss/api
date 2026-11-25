@@ -20,6 +20,7 @@ import {
   uniqueIndex,
   pgTable,
   primaryKey,
+  smallint,
   text,
   timestamp,
   uuid,
@@ -85,6 +86,7 @@ export const users = pgTable(
     bannerExternalUrl: text("banner_external_url"),
     colour: text().notNull().default("#808080"),
     changelogSeenAt: timestamp("changelog_seen_at", { withTimezone: true, precision: 3 }),
+    feedPersonalize: boolean("feed_personalize").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -358,6 +360,7 @@ export const posts = pgTable(
       table.id.desc(),
     ),
     index("posts_feed_idx").on(table.createdAt.desc(), table.id.desc()),
+    index("posts_author_idx").on(table.authorId, table.createdAt.desc(), table.id.desc()),
     index("posts_content_search_idx").using("gin", sql`to_tsvector('simple', ${table.content})`),
     check(
       "posts_content_check",
@@ -454,6 +457,7 @@ export const postLikes = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },
   (table) => [
     primaryKey({ columns: [table.postId, table.userId] }),
@@ -808,4 +812,47 @@ export const changelogEntries = pgTable("changelog_entries", {
   index("changelog_entries_published_idx").on(table.publishedAt),
   check("changelog_entries_title_check", sql`char_length(${table.title}) between 1 and 120`),
   check("changelog_entries_body_check", sql`char_length(${table.body}) <= 4000`),
+]);
+
+export const feedClientEventTypes = [
+  "impression", "dwell", "open", "detail_dwell", "expand", "spoiler", "media_open",
+  "link_open", "profile_open", "voice_play", "share", "topic_open",
+] as const;
+export const feedServerEventTypes = [
+  "like", "unlike", "reply", "quote", "repost", "unrepost", "save", "unsave", "poll_vote",
+  "follow", "unfollow", "block", "report", "more", "less", "snooze", "topic_more", "topic_less",
+] as const;
+export const feedEventTypes = [...feedClientEventTypes, ...feedServerEventTypes] as const;
+export const feedSurfaces = ["for_you", "following", "latest", "thread", "profile", "topic", "search", "saved", "other"] as const;
+const sqlList = (values: readonly string[]) => sql.raw(values.map((value) => `'${value}'`).join(", "));
+
+export const feedEvents = pgTable("feed_events", {
+  id: bigint({ mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  type: text().$type<(typeof feedEventTypes)[number]>().notNull(),
+  postId: uuid("post_id").references(() => posts.id, { onDelete: "cascade" }),
+  authorId: uuid("author_id").references(() => users.id, { onDelete: "cascade" }),
+  surface: text().$type<(typeof feedSurfaces)[number]>(),
+  position: smallint(),
+  requestId: uuid("request_id"),
+  sessionId: uuid("session_id"),
+  seq: integer(),
+  value: integer(),
+  detail: text(),
+  client: text().$type<"mobile" | "desktop">(),
+  origin: text().$type<"client" | "server" | "backfill">().notNull(),
+  clientAt: timestamp("client_at", { withTimezone: true, precision: 3 }),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  index("feed_events_user_idx").on(table.userId, table.createdAt.desc()),
+  index("feed_events_post_idx").on(table.postId, table.type),
+  index("feed_events_author_idx").on(table.authorId).where(sql`${table.authorId} is not null`),
+  index("feed_events_created_idx").using("brin", table.createdAt),
+  uniqueIndex("feed_events_session_seq_idx").on(table.sessionId, table.seq).where(sql`${table.sessionId} is not null`),
+  check("feed_events_type_check", sql`${table.type} in (${sqlList(feedEventTypes)})`),
+  check("feed_events_surface_check", sql`${table.surface} is null or ${table.surface} in (${sqlList(feedSurfaces)})`),
+  check("feed_events_client_check", sql`${table.client} is null or ${table.client} in ('mobile', 'desktop')`),
+  check("feed_events_origin_check", sql`${table.origin} in ('client', 'server', 'backfill')`),
+  check("feed_events_detail_check", sql`${table.detail} is null or char_length(${table.detail}) <= 253`),
+  check("feed_events_session_check", sql`(${table.sessionId} is null) = (${table.seq} is null)`),
 ]);

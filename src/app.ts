@@ -28,6 +28,7 @@ import express, { type ErrorRequestHandler } from "express";
 import pg from "pg";
 import admin from "./admin.ts";
 import reports from "./reports.ts";
+import feed from "./feed.ts";
 import blocks from "./blocks.ts";
 import auth from "./auth.ts";
 import { pool } from "./db/index.ts";
@@ -56,11 +57,13 @@ app.post("/webhooks/cns", (_req, res) => {
   res.status(503).json({ error: "webhooks_not_configured" });
 });
 app.use("/api/reports", express.json({ limit: "64kb" }), reports);
+app.use("/api/feed/events", express.json({ limit: "64kb" }));
 app.use(express.json({ limit: "16kb" }));
 app.use("/auth", auth);
 app.use("/api/admin", admin);
 app.use("/api/blocks", blocks);
 app.use("/api/posts", posts);
+app.use("/api/feed", feed);
 app.use("/api/post-images", postImages);
 app.use("/api/og", og);
 app.use("/api/live", live);
@@ -203,7 +206,11 @@ if (import.meta.main) {
       to_regclass('public.profile_pins') IS NOT NULL AND
       to_regclass('public.github_connections') IS NOT NULL AND
       to_regclass('public.github_link_attempts') IS NOT NULL AND
-      to_regclass('public.github_contribution_jobs') IS NOT NULL AS ready`);
+      to_regclass('public.github_contribution_jobs') IS NOT NULL AND
+      to_regclass('public.feed_events') IS NOT NULL AND
+      to_regclass('public.posts_author_idx') IS NOT NULL AND
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'feed_personalize') AND
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'post_likes' AND column_name = 'created_at') AS ready`);
     if (!schema.rows[0]?.ready) {
       throw new Error(
         "Database schema is missing. Run pnpm db:migrate in api/ before starting the API.",

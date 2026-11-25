@@ -93,6 +93,7 @@ export async function readSessionHash(tokenHash: string) {
             role: users.role,
             approvedAt: users.approvedAt,
             navigation: users.navigation,
+            feedPersonalize: users.feedPersonalize,
             namePaintsDisabled: users.namePaintsDisabled,
             namePaintAnimationsDisabled: users.namePaintAnimationsDisabled,
             ...banDetailsSelection,

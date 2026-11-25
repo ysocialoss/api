@@ -484,6 +484,13 @@
       "when": 1795601695508,
       "tag": "0068_changelog",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1795608531196,
+      "tag": "0069_feed_events",
+      "breakpoints": true
     }
   ]
 }

@@ -63,6 +63,7 @@ import { pollDefinitionSchema } from "./poll-schema.ts";
 import { flushMediaDeletions } from "./storage/media-lifecycle.ts";
 import { readVoiceSelection } from "./storage/voice-selection.ts";
 import { previewIconForPost, previewImageForPost, previewsForPost } from "./link-previews.ts";
+import { readFeedContext, recordFeedEvent, type FeedContext } from "./ranking/events.ts";
 
 const router = Router();
 
@@ -86,6 +87,15 @@ const cursorSchema = z.strictObject({
   createdAt: z.iso.datetime(),
   id: z.uuid(),
 });
+export function readCursor(value: unknown) {
+  if (value === undefined) return undefined;
+  try {
+    if (typeof value !== "string" || value.length > 512) throw new Error();
+    return cursorSchema.parse(JSON.parse(Buffer.from(value, "base64url").toString("utf8")));
+  } catch {
+    throw new AuthError(400, "invalid_cursor");
+  }
+}
 export async function findPost(id: string, viewerId: string | null = null) {
   const [post] = await db
     .select(postSelection(viewerId))
@@ -100,11 +110,13 @@ async function createPost({
   input,
   parentId = null,
   quotedPostId = null,
+  context = null,
 }: {
   userId: string;
   input: z.infer<typeof createSchema>;
   parentId?: string | null;
   quotedPostId?: string | null;
+  context?: FeedContext | null;
 }) {
   const selection = !input.gifToken
     ? null
@@ -188,6 +200,10 @@ async function createPost({
         topics: extractTopics(input.content),
       });
       await publishLiveChange(tx, await affectedPostIds(tx, saved.id));
+      if (parentId && parentAuthor)
+        await recordFeedEvent(tx, { userId, type: "reply", postId: parentId, authorId: parentAuthor, context });
+      if (quotedPostId && quotedAuthor)
+        await recordFeedEvent(tx, { userId, type: "quote", postId: quotedPostId, authorId: quotedAuthor, context });
       if (parentAuthor)
         await recordNotification(tx, {
           recipientId: parentAuthor,
@@ -318,18 +334,7 @@ const listPosts: import("express").RequestHandler = async (req, res) => {
   const textSearch = search?.usable ? search : undefined;
   const searching = textSearch !== undefined || filters?.active === true;
   const oldestFirst = searching && filters?.sort === "oldest";
-  let cursor: z.infer<typeof cursorSchema> | undefined;
-  if (req.query.cursor !== undefined) {
-    try {
-      if (typeof req.query.cursor !== "string" || req.query.cursor.length > 512)
-        throw new Error();
-      cursor = cursorSchema.parse(
-        JSON.parse(Buffer.from(req.query.cursor, "base64url").toString("utf8")),
-      );
-    } catch {
-      throw new AuthError(400, "invalid_cursor");
-    }
-  }
+  const cursor = readCursor(req.query.cursor);
   if (search && !search.usable && !searching) {
     res.json({
       repostedBy: {},
@@ -451,6 +456,7 @@ router.post("/", async (req, res) => {
       userId: user.id,
       input: parsed.data,
       quotedPostId: parsed.data.quotedPostId ?? null,
+      context: readFeedContext(req),
     }),
     serverNow: new Date().toISOString(),
   });
@@ -648,7 +654,7 @@ router.put("/:id/poll/vote", async (req, res) => {
   const { optionIndex } = parsed.data;
   const poll = await db.transaction(async (tx) => {
     const [post] = await tx
-      .select({ poll: posts.poll })
+      .select({ poll: posts.poll, authorId: posts.authorId })
       .from(posts)
       .where(and(eq(posts.id, postId), visiblePost))
       .for("update");
@@ -656,13 +662,16 @@ router.put("/:id/poll/vote", async (req, res) => {
     if (optionIndex >= post.poll.options.length)
       throw new AuthError(400, "invalid_poll_option");
 
-    await tx
+    const [vote] = await tx
       .insert(pollVotes)
       .values({ postId, userId: user.id, optionIndex })
       .onConflictDoUpdate({
         target: [pollVotes.postId, pollVotes.userId],
         set: { optionIndex },
-      });
+      })
+      .returning({ inserted: sql<boolean>`(xmax = 0)` });
+    if (vote?.inserted)
+      await recordFeedEvent(tx, { userId: user.id, type: "poll_vote", postId, authorId: post.authorId, context: readFeedContext(req) });
 
     await publishLiveChange(tx, [postId]);
     const [result] = await tx
@@ -775,6 +784,7 @@ router.post("/:id/replies", async (req, res) => {
       userId: user.id,
       input: parsed.data,
       parentId: req.params.id,
+      context: readFeedContext(req),
     }),
     serverNow: new Date().toISOString(),
   });
@@ -799,7 +809,8 @@ async function setLike(req: Request, liked: boolean) {
         .values({ postId: id, userId: user.id })
         .onConflictDoNothing()
         .returning();
-      if (inserted)
+      if (inserted) {
+        await recordFeedEvent(tx, { userId: user.id, type: "like", postId: id, authorId: post.authorId, context: readFeedContext(req) });
         await recordNotification(tx, {
           recipientId: post.authorId,
           actorId: user.id,
@@ -807,10 +818,14 @@ async function setLike(req: Request, liked: boolean) {
           postId: id,
           subject: id,
         });
+      }
     } else {
-      await tx
+      const [removed] = await tx
         .delete(postLikes)
-        .where(and(eq(postLikes.postId, id), eq(postLikes.userId, user.id)));
+        .where(and(eq(postLikes.postId, id), eq(postLikes.userId, user.id)))
+        .returning({ postId: postLikes.postId });
+      if (removed)
+        await recordFeedEvent(tx, { userId: user.id, type: "unlike", postId: id, authorId: post.authorId, context: readFeedContext(req) });
     }
     await publishLiveChange(tx, [id]);
     const [state] = await tx
@@ -855,7 +870,9 @@ async function setRepost(req: Request, reposted: boolean) {
           set: { audience },
           setWhere: ne(postReposts.audience, audience),
         })
-        .returning({ audience: postReposts.audience });
+        .returning({ audience: postReposts.audience, inserted: sql<boolean>`(xmax = 0)` });
+      if (changed?.inserted)
+        await recordFeedEvent(tx, { userId: user.id, type: "repost", postId: id, authorId: post.authorId, context: readFeedContext(req) });
       // A friends-only repost must not tell a stranger about it.
       const [{ friends }] = (
         await tx.execute<{ friends: boolean }>(
@@ -886,11 +903,14 @@ async function setRepost(req: Request, reposted: boolean) {
           subject: id,
         });
     } else {
-      await tx
+      const [removed] = await tx
         .delete(postReposts)
         .where(
           and(eq(postReposts.postId, id), eq(postReposts.userId, user.id)),
-        );
+        )
+        .returning({ postId: postReposts.postId });
+      if (removed)
+        await recordFeedEvent(tx, { userId: user.id, type: "unrepost", postId: id, authorId: post.authorId, context: readFeedContext(req) });
     }
     await publishLiveChange(tx, [id]);
     if (reposted)
@@ -928,9 +948,15 @@ async function setSave(req: Request, saved: boolean) {
     if (!post) throw new AuthError(404, "post_not_found");
     if (saved) {
       await requireNotBlocked(tx, user.id, post.authorId);
-      await tx.insert(postSaves).values({ postId: id, userId: user.id }).onConflictDoNothing();
+      const [inserted] = await tx.insert(postSaves).values({ postId: id, userId: user.id }).onConflictDoNothing()
+        .returning({ postId: postSaves.postId });
+      if (inserted)
+        await recordFeedEvent(tx, { userId: user.id, type: "save", postId: id, authorId: post.authorId, context: readFeedContext(req) });
     } else {
-      await tx.delete(postSaves).where(and(eq(postSaves.postId, id), eq(postSaves.userId, user.id)));
+      const [removed] = await tx.delete(postSaves).where(and(eq(postSaves.postId, id), eq(postSaves.userId, user.id)))
+        .returning({ postId: postSaves.postId });
+      if (removed)
+        await recordFeedEvent(tx, { userId: user.id, type: "unsave", postId: id, authorId: post.authorId, context: readFeedContext(req) });
     }
     const [state] = await tx.select(saveSelection(user.id)).from(posts).where(eq(posts.id, id));
     return state;

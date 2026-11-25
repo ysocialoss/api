@@ -20,6 +20,7 @@ import { AuthError } from "./auth/provider.ts";
 import { postSelection, serializePost } from "./post-data.ts";
 import { banDetailsSelection, githubProfileSelection, postCountSelection, publicProfileSelection, userSelection } from "./user-data.ts";
 import { recordNotification } from "./notification-events.ts";
+import { readFeedContext, recordFeedEvent } from "./ranking/events.ts";
 import { blockState, notBlockedSql, requireNotBlocked } from "./blocks.ts";
 import { badgeIconDirectory, isBadgeIcon } from "./profile-badges.ts";
 import { generalPronounRecommendations, pronounRecommendations, pronounsLimit, pronounsSchema } from "./pronouns.ts";
@@ -408,7 +409,8 @@ async function setFollow(req: Request, follow: boolean) {
         .values({ followerId: viewer.id, followingId: target.id })
         .onConflictDoNothing()
         .returning();
-      if (inserted)
+      if (inserted) {
+        await recordFeedEvent(tx, { userId: viewer.id, type: "follow", authorId: target.id, context: readFeedContext(req) });
         await recordNotification(tx, {
           recipientId: target.id,
           actorId: viewer.id,
@@ -416,15 +418,19 @@ async function setFollow(req: Request, follow: boolean) {
           postId: null,
           subject: target.id,
         });
+      }
     } else {
-      await tx
+      const [removed] = await tx
         .delete(userFollows)
         .where(
           and(
             eq(userFollows.followerId, viewer.id),
             eq(userFollows.followingId, target.id),
           ),
-        );
+        )
+        .returning({ id: userFollows.followingId });
+      if (removed)
+        await recordFeedEvent(tx, { userId: viewer.id, type: "unfollow", authorId: target.id, context: readFeedContext(req) });
     }
     const [count] = await tx
       .select({ followerCount: sql<number>`count(*)::int` })
