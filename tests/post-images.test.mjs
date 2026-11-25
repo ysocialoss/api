@@ -83,7 +83,7 @@ test("screens and publishes image drafts, then moderates or cascades their remov
     let failDeletes = false;
     t.mock.method(avatarStorage.client.config.requestHandler, "handle", async (req) => {
       const key = decodeURIComponent(req.path.split("/").slice(-2).join("/"));
-      assert.match(key, /^flagged-images\/[0-9a-f-]{36}\.avif$/);
+      assert.match(key, /^(flagged-images|post-images)\/[0-9a-f-]{36}\.avif$/);
       assert.match(req.hostname, /\.eu\.r2\.cloudflarestorage\.com$/);
       if (req.method === "PUT") {
         assert.equal(req.headers["content-type"], "image/avif");
@@ -241,6 +241,11 @@ test("screens and publishes image drafts, then moderates or cascades their remov
       assert.deepEqual((await response.json()).post.imageIds, [first]);
     }
     assert.equal((await publish({ attachmentIds: [first] })).status, 400);
+    const { rows: [stored] } = await pool.query("SELECT object_key, data FROM post_images WHERE id = $1", [first]);
+    assert.equal(stored.data, null);
+    assert.match(stored.object_key, /^post-images\//);
+    assert.deepEqual(objects.get(stored.object_key), scanned);
+    assert.equal((await pool.query("SELECT key FROM media_deletions WHERE key = $1", [stored.object_key])).rowCount, 0);
     const served = await request(imagePath);
     assert.equal(served.headers.get("content-type"), "image/avif");
     assert.equal(served.headers.get("cache-control"), "no-store");
@@ -324,8 +329,23 @@ test("screens and publishes image drafts, then moderates or cascades their remov
     assert.equal((await request(`/api/post-images/${third}`)).status, 404);
     const detail = await request(`/api/admin/post/${replyPost.id}`, { user: admin });
     assert.deepEqual((await detail.json()).imageIds, []);
+    const { rows: [legacyImage] } = await pool.query(
+      "INSERT INTO post_images (uploader_id, post_id, data, expires_at) VALUES ($1, $2, $3, now()) RETURNING id",
+      [owner.id, replyPost.id, scanned],
+    );
+    assert.deepEqual(Buffer.from(await (await request(`/api/post-images/${legacyImage.id}`)).arrayBuffer()), scanned);
     assert.equal((await request(`/api/posts/${clientId}`, { method: "DELETE", user: owner })).status, 204);
     assert.equal((await request(imagePath)).status, 404);
+
+    // Removed rows queue their objects; only images that still exist stay in R2.
+    await pool.query("UPDATE media_deletions SET available_at = now()");
+    await flushMediaDeletions();
+    const { rows: remaining } = await pool.query("SELECT object_key FROM post_images WHERE object_key IS NOT NULL");
+    assert.deepEqual(
+      [...objects.keys()].filter((key) => key.startsWith("post-images/")).sort(),
+      remaining.map(({ object_key }) => object_key).sort(),
+    );
+    assert.equal(objects.has(stored.object_key), false);
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     await pool.end();
