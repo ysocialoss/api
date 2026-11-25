@@ -370,9 +370,12 @@ export const postImages = pgTable("post_images", {
   id: uuid().defaultRandom().primaryKey(),
   uploaderId: uuid("uploader_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   postId: uuid("post_id").references(() => posts.id, { onDelete: "cascade" }),
-  data: dmBlob().notNull(),
+  // Legacy rows and deployments without R2 keep bytes here; everything else lives in R2.
+  data: dmBlob(),
+  objectKey: text("object_key").unique(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 }, (table) => [
+  check("post_images_one_image", sql`num_nonnulls(${table.data}, ${table.objectKey}) = 1`),
   index("post_images_post_idx").on(table.postId),
   index("post_images_draft_uploader_idx").on(table.uploaderId).where(sql`${table.postId} IS NULL`),
   index("post_images_draft_expiry_idx").on(table.expiresAt).where(sql`${table.postId} IS NULL`),

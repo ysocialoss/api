@@ -20,9 +20,8 @@ import { badgeDetails, badgeIcons, badgePresets } from "./profile-badges.ts";
 import { pronounsSchema } from "./pronouns.ts";
 import { displayNameSchema } from "./display-name.ts";
 import { hasTooManyBlankLines } from "./blank-lines.ts";
-import { imageFlagCutoff, maxPostImages, postImageUploadBody, processPostImage, sendPostImage } from "./post-images.ts";
+import { imageFlagCutoff, maxPostImages, postImageUploadBody, processPostImage, savePostImage, sendPostImage, storedImage } from "./post-images.ts";
 import { stageAvatarUpload, stageBannerUpload } from "./storage/profile-upload.ts";
-import { getAvatar } from "./storage/r2.ts";
 import { randomUUID } from "node:crypto";
 
 const router = Router();
@@ -45,10 +44,10 @@ router.get("/post-images/:id", async (req, res) => {
   await requireStaff(req);
   const id = z.uuid().safeParse(req.params.id);
   if (!id.success) throw new AuthError(404, "post_image_not_found");
-  const [image] = await db.select({ data: postImages.data }).from(postImages)
+  const [image] = await db.select(storedImage).from(postImages)
     .where(and(eq(postImages.id, id.data), isNotNull(postImages.postId)));
   if (!image) throw new AuthError(404, "post_image_not_found");
-  sendPostImage(res, image.data);
+  await sendPostImage(res, image);
 });
 
 const userFields = {
@@ -183,9 +182,7 @@ router.get("/flags/:id/image", async (req, res) => {
   const [flag] = await db.select({ data: postImageFlags.data, objectKey: postImageFlags.objectKey }).from(postImageFlags)
     .where(and(eq(postImageFlags.id, id.data), gt(postImageFlags.createdAt, imageFlagCutoff())));
   if (!flag) throw new AuthError(404, "flag_not_found");
-  if (flag.data) return sendPostImage(res, flag.data);
-  if (!flag.objectKey) throw new AuthError(404, "flag_not_found");
-  sendPostImage(res, Buffer.from(await getAvatar(flag.objectKey)));
+  await sendPostImage(res, flag);
 });
 
 router.delete("/flags/:id", async (req, res) => {
@@ -458,7 +455,7 @@ router.post("/posts/:id/attachments/images{/:imageId}", async (req, res, next) =
   const uploaderId: string = res.locals.uploaderId;
   await processPostImage(
     { body: req.body, uploaderId, filename: req.get("x-post-image-name") },
-    (data) => db.transaction(async (tx) => {
+    (data) => savePostImage(data, async (tx, image) => {
       const [target] = await tx.select({ authorId: posts.authorId }).from(posts).where(eq(posts.id, id));
       if (!target) throw new AuthError(404, "post_not_found");
       // Lock users before the post, as account removal locks users before cascading to posts.
@@ -474,7 +471,7 @@ router.post("/posts/:id/attachments/images{/:imageId}", async (req, res, next) =
 
       // Published images follow the post author's visibility and account lifecycle.
       const [saved] = await tx.insert(postImages)
-        .values({ postId: id, uploaderId: post.authorId, data, expiresAt: new Date() })
+        .values({ postId: id, uploaderId: post.authorId, ...image, expiresAt: new Date() })
         .returning({ id: postImages.id });
       const imageIds = imageId
         ? post.imageIds.map((current) => current === imageId ? saved.id : current)

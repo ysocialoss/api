@@ -1,7 +1,7 @@
 import { ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { inArray, sql } from "drizzle-orm";
 import { db } from "../db/index.ts";
-import { avatarHistory, mediaDeletions, posts, users } from "../db/schema.ts";
+import { avatarHistory, mediaDeletions, postImages, posts, users } from "../db/schema.ts";
 import { requireAvatarStorage } from "./r2.ts";
 
 export async function sweepUnusedMedia(remove = false, database = db) {
@@ -9,9 +9,10 @@ export async function sweepUnusedMedia(remove = false, database = db) {
   const { client, bucket } = requireAvatarStorage();
   let unused = 0;
   for (const media of [
-    { prefix: "avatars/", column: users.avatarKey },
-    { prefix: "banners/", column: users.bannerKey },
-    { prefix: "voices/", column: sql<string>`${posts.voice}->>'key'` },
+    { prefix: "avatars/", column: users.avatarKey, table: users },
+    { prefix: "banners/", column: users.bannerKey, table: users },
+    { prefix: "voices/", column: sql<string>`${posts.voice}->>'key'`, table: posts },
+    { prefix: "post-images/", column: postImages.objectKey, table: postImages },
   ]) {
     let continuationToken: string | undefined;
     do {
@@ -25,7 +26,7 @@ export async function sweepUnusedMedia(remove = false, database = db) {
       );
       const candidates = (page.Contents ?? []).flatMap((object) =>
         object.Key &&
-        /^(avatars|banners|voices)\/[a-f0-9-]{36}\.(avif|png|webp|gif|jpg|m4a)$/.test(
+        /^(avatars|banners|voices|post-images)\/[a-f0-9-]{36}\.(avif|png|webp|gif|jpg|m4a)$/.test(
           object.Key,
         ) &&
         object.LastModified &&
@@ -36,7 +37,7 @@ export async function sweepUnusedMedia(remove = false, database = db) {
       const saved = candidates.length
         ? await database
             .select({ key: media.column })
-            .from(media.prefix === "voices/" ? posts : users)
+            .from(media.table)
             .where(inArray(sql<string>`${media.column}`, candidates))
         : [];
       const recent =

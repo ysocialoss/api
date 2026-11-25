@@ -3,7 +3,7 @@ import { sweepUnusedMedia } from "./media-sweep.ts";
 import { DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { and, desc, eq, inArray, lte, or, sql } from "drizzle-orm";
 import { createDatabase, db, pool } from "../db/index.ts";
-import { avatarHistory, mediaDeletions, moderationActivity, posts, users } from "../db/schema.ts";
+import { avatarHistory, mediaDeletions, moderationActivity, postImages, posts, users } from "../db/schema.ts";
 import { AuthError } from "../auth/provider.ts";
 import type { BannerCrop } from "./banner-crop.ts";
 import { avatarStorage, putAvatar } from "./r2.ts";
@@ -233,7 +233,9 @@ export async function flushMediaDeletions(key?: string, database = db) {
               .limit(1);
         const [voicePost] = job.key.startsWith("voices/") ? await tx.select({ id: posts.id }).from(posts)
           .where(eq(sql`${posts.voice}->>'key'`, job.key)).limit(1) : [];
-        if (!active && !kept && !voicePost) {
+        const [postImage] = job.key.startsWith("post-images/") ? await tx.select({ id: postImages.id })
+          .from(postImages).where(eq(postImages.objectKey, job.key)).limit(1) : [];
+        if (!active && !kept && !voicePost && !postImage) {
           try {
             // Deleting an already absent key succeeds, including after a crash.
             await client.send(
