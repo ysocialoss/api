@@ -51,6 +51,8 @@ export const env = z
         .regex(/^[a-fA-F0-9]{64}$/)
         .optional(),
     ),
+    // set on staging so unreleased changelog entries show as "coming soon".
+    CHANGELOG_SHOW_UNRELEASED: z.stringbool().default(false),
     NODE_ENV: z
       .enum(["development", "test", "production"])
       .default("development"),
