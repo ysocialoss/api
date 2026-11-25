@@ -84,6 +84,7 @@ export const users = pgTable(
     bannerCrop: jsonb("banner_crop").$type<BannerCrop>(),
     bannerExternalUrl: text("banner_external_url"),
     colour: text().notNull().default("#808080"),
+    changelogSeenAt: timestamp("changelog_seen_at", { withTimezone: true, precision: 3 }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -777,3 +778,34 @@ export const userPaints = pgTable("user_paints", {
   paintId: uuid("paint_id").notNull().references(() => paints.id, { onDelete: "cascade" }),
   grantedAt: timestamp("granted_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [primaryKey({ columns: [table.userId, table.paintId] }), index("user_paints_paint_idx").on(table.paintId)]);
+
+export const changelogApps = ["api", "web", "web-admin", "android", "mobile"] as const;
+export const changelogCategory = pgEnum("changelog_category", ["new", "improved", "fixed", "removed", "technical"]);
+
+export const releases = pgTable("releases", {
+  id: uuid().defaultRandom().primaryKey(),
+  app: text().$type<(typeof changelogApps)[number]>().notNull(),
+  tag: text().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  unique("releases_app_tag_unique").on(table.app, table.tag),
+  index("releases_created_idx").on(table.createdAt),
+]);
+
+export const changelogEntries = pgTable("changelog_entries", {
+  id: uuid().defaultRandom().primaryKey(),
+  app: text().$type<(typeof changelogApps)[number]>().notNull(),
+  category: changelogCategory().notNull(),
+  title: text().notNull(),
+  body: text().notNull().default(""),
+  releaseId: uuid("release_id").references(() => releases.id, { onDelete: "restrict" }),
+  publishedAt: timestamp("published_at", { withTimezone: true, precision: 3 }),
+  authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  index("changelog_entries_unreleased_idx").on(table.app, table.createdAt).where(sql`${table.releaseId} is null`),
+  index("changelog_entries_published_idx").on(table.publishedAt),
+  check("changelog_entries_title_check", sql`char_length(${table.title}) between 1 and 120`),
+  check("changelog_entries_body_check", sql`char_length(${table.body}) <= 4000`),
+]);

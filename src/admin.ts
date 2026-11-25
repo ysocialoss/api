@@ -4,6 +4,7 @@ import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
 import { requireAdminWrite, requireStaff, requireStaffWrite } from "./admin-access.ts";
 import adminActivity from "./admin-activity.ts";
+import adminChangelog from "./admin-changelog.ts";
 import adminSystem from "./admin-system.ts";
 import adminReports, { openReportCount } from "./admin-reports.ts";
 import { db } from "./db/index.ts";
@@ -31,6 +32,7 @@ router.use((_req, res, next) => {
 router.use("/reports", adminReports);
 router.use("/activity", adminActivity);
 router.use("/system", adminSystem);
+router.use("/changelog", adminChangelog);
 
 router.get("/session", async (req, res) => {
   await requireStaff(req);
