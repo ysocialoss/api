@@ -18,6 +18,8 @@ import { editPost, postContentSchema } from "./post-edit.ts";
 import { publishUserPostVisibility, removeUser } from "./user-removal.ts";
 import { badgeDetails, badgeIcons, badgePresets } from "./profile-badges.ts";
 import { pronounsSchema } from "./pronouns.ts";
+import { displayNameSchema } from "./display-name.ts";
+import { hasTooManyBlankLines } from "./blank-lines.ts";
 import { imageFlagCutoff, maxPostImages, postImageUploadBody, processPostImage, sendPostImage } from "./post-images.ts";
 import { stageAvatarUpload, stageBannerUpload } from "./storage/profile-upload.ts";
 import { getAvatar } from "./storage/r2.ts";
@@ -552,8 +554,8 @@ router.delete("/posts/:id/attachments/:kind{/:imageId}", async (req, res) => {
   res.sendStatus(204);
 });
 
-const nameChange = z.strictObject({ action: z.literal("changeName"), value: z.string().trim().min(1).max(80) });
-const bioChange = z.strictObject({ action: z.literal("changeBio"), value: z.string().trim().min(1).max(160) });
+const nameChange = z.strictObject({ action: z.literal("changeName"), value: displayNameSchema });
+const bioChange = z.strictObject({ action: z.literal("changeBio"), value: z.string().trim().min(1).max(160).refine((value) => !hasTooManyBlankLines(value)) });
 const profileChange = z.discriminatedUnion("action", [
   z.strictObject({ action: z.literal("clearBio") }),
   z.strictObject({ action: z.literal("clearAvatar") }),
