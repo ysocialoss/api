@@ -6,6 +6,7 @@ import { Router } from "express";
 import { and, eq, gt, lt } from "drizzle-orm";
 import { z } from "zod";
 import { pronounsSchema } from "./pronouns.ts";
+import { displayNameLimit } from "./display-name.ts";
 import { db } from "./db/index.ts";
 import {
   authIdentities,
@@ -255,7 +256,7 @@ router.post("/profile", async (req, res) => {
       .insert(users)
       .values({
         handle: input.data.handle,
-        displayName: identity.displayName.slice(0, 80),
+        displayName: identity.displayName.slice(0, displayNameLimit),
         pronouns: input.data.pronouns,
       })
       .returning();
