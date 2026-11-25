@@ -23,6 +23,7 @@ import { recordNotification } from "./notification-events.ts";
 import { blockState, notBlockedSql, requireNotBlocked } from "./blocks.ts";
 import { badgeIconDirectory, isBadgeIcon } from "./profile-badges.ts";
 import { displayNameSchema } from "./display-name.ts";
+import { hasTooManyBlankLines } from "./blank-lines.ts";
 import { generalPronounRecommendations, pronounRecommendations, pronounsLimit, pronounsSchema } from "./pronouns.ts";
 
 const router = Router();
@@ -70,7 +71,7 @@ router.patch("/me", async (req, res) => {
     .strictObject({
       handle: handleSchema,
       displayName: displayNameSchema,
-      bio: z.string().max(160),
+      bio: z.string().max(160).refine((value) => !hasTooManyBlankLines(value)),
       pronouns: pronounsSchema,
     })
     .partial()
