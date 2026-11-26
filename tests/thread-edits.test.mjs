@@ -66,7 +66,9 @@ test("thread view, edit history and friend likes", async () => {
           ...(user ? { Cookie: `session=${user.token}` } : {}),
           "Content-Type": "application/json",
         },
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body: body === undefined ? undefined : JSON.stringify(
+          path.startsWith("/api/admin/") && method !== "GET" && body && typeof body === "object" && !("ground" in body)
+            ? { ...body, ground: { type: "terms", ref: "5.7", facts: "Test decision" } } : body),
       });
     }
     async function json(user, path, method = "GET", body, status = 200) {

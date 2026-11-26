@@ -16,6 +16,8 @@ import { serveLiveStream } from "./live.ts";
 import { removePost } from "./post-removal.ts";
 import { editPost, postContentSchema } from "./post-edit.ts";
 import { publishUserPostVisibility, removeUser } from "./user-removal.ts";
+import { adminAppeals, recordDecision, splitGround } from "./moderation.ts";
+import adminSafety from "./safety/admin-safety.ts";
 import { badgeDetails, badgeIcons, badgePresets } from "./profile-badges.ts";
 import { pronounsSchema } from "./pronouns.ts";
 import { imageFlagCutoff, maxPostImages, postImageUploadBody, processPostImage, sendPostImage } from "./post-images.ts";
@@ -30,6 +32,8 @@ router.use((_req, res, next) => {
 });
 
 router.use("/reports", adminReports);
+router.use("/appeals", adminAppeals);
+router.use("/safety", adminSafety);
 router.use("/activity", adminActivity);
 router.use("/system", adminSystem);
 router.use("/changelog", adminChangelog);
@@ -298,9 +302,11 @@ router.patch("/users/:id/account", async (req, res) => {
   const viewer = await requireAdminWrite(req);
   const id = z.uuid().safeParse(req.params.id);
   if (!id.success) throw new AuthError(404, "user_not_found");
-  const input = accountAction.safeParse(req.body);
+  const split = splitGround(req.body, (req.body as { action?: unknown } | undefined)?.action === "ban");
+  const input = accountAction.safeParse(split.rest);
   if (!input.success) throw new AuthError(400, "invalid_account_action");
   const { action } = input.data;
+  const ground = split.ground;
   const targetId = id.data.toLowerCase();
   if (targetId === viewer.id) throw new AuthError(409, "protected_account");
   await db.transaction(async (tx) => {
@@ -327,6 +333,10 @@ router.patch("/users/:id/account", async (req, res) => {
       await tx.update(users).set({
         bannedAt: new Date(), banReason: input.data.reason,
       }).where(eq(users.id, target.id));
+      if (ground) await recordDecision(tx, {
+        userId: target.id, action: "ban", targetType: "user", targetKey: target.id, excerpt: input.data.reason,
+        ground, decidedBy: { id: actor.id, handle: actor.handle },
+      });
     } else if (action === "unban" && target.bannedAt) {
       await tx.update(users).set({ bannedAt: null, banReason: null }).where(eq(users.id, target.id));
     } else {
@@ -373,15 +383,22 @@ router.patch("/posts/:id", async (req, res) => {
   const viewer = await requireAdminWrite(req);
   const id = z.uuid().safeParse(req.params.id);
   if (!id.success) throw new AuthError(404, "post_not_found");
-  const input = postContentSchema.safeParse(req.body);
+  const split = splitGround(req.body, true);
+  const input = postContentSchema.safeParse(split.rest);
   if (!input.success) throw new AuthError(400, "invalid_content");
+  const ground = split.ground!;
 
   await db.transaction(async (tx) => {
     const [actor] = await tx.select({ role: users.role, handle: users.handle, bannedAt: users.bannedAt })
       .from(users).where(eq(users.id, viewer.id)).for("share");
     if (actor?.role !== "admin" || actor.bannedAt) throw new AuthError(403, "admin_required");
+    const [before] = await tx.select({ content: posts.content }).from(posts).where(eq(posts.id, id.data));
     const { authorId, changed } = await editPost(tx, { id: id.data, content: input.data.content, editor: { kind: "admin" } });
     if (!changed) return;
+    await recordDecision(tx, {
+      userId: authorId, action: "edit_post", targetType: "post", targetKey: id.data, excerpt: before?.content ?? "",
+      ground, decidedBy: { id: viewer.id, handle: actor.handle },
+    });
     const [author] = await tx.select({ handle: users.handle }).from(users).where(eq(users.id, authorId));
     await tx.insert(moderationActivity).values({
       actorId: viewer.id, actorHandle: actor.handle, targetId: id.data,
@@ -395,7 +412,8 @@ router.patch("/posts/:id/visibility", async (req, res) => {
   const viewer = await requireStaffWrite(req);
   const id = z.uuid().safeParse(req.params.id);
   if (!id.success) throw new AuthError(404, "post_not_found");
-  const input = z.strictObject({ hidden: z.boolean() }).safeParse(req.body);
+  const split = splitGround(req.body, (req.body as { hidden?: unknown } | undefined)?.hidden === true);
+  const input = z.strictObject({ hidden: z.boolean() }).safeParse(split.rest);
   if (!input.success) throw new AuthError(400, "invalid_post_visibility");
   const { hidden } = input.data;
 
@@ -404,11 +422,15 @@ router.patch("/posts/:id/visibility", async (req, res) => {
       .from(users).where(eq(users.id, viewer.id)).for("share");
     if (!actor?.approvedAt || actor.bannedAt || (actor.role !== "admin" && actor.role !== "moderator"))
       throw new AuthError(403, "staff_required");
-    const [post] = await tx.select({ hiddenAt: posts.hiddenAt, authorId: posts.authorId })
+    const [post] = await tx.select({ hiddenAt: posts.hiddenAt, authorId: posts.authorId, content: posts.content })
       .from(posts).where(eq(posts.id, id.data)).for("update");
     if (!post) throw new AuthError(404, "post_not_found");
     if (Boolean(post.hiddenAt) === hidden) return;
     await tx.update(posts).set({ hiddenAt: hidden ? new Date() : null }).where(eq(posts.id, id.data));
+    if (hidden && split.ground) await recordDecision(tx, {
+      userId: post.authorId, action: "hide_post", targetType: "post", targetKey: id.data, excerpt: post.content,
+      ground: split.ground, decidedBy: { id: viewer.id, handle: actor.handle },
+    });
     const [author] = await tx.select({ handle: users.handle }).from(users).where(eq(users.id, post.authorId));
     await tx.insert(moderationActivity).values({
       actorId: viewer.id, actorHandle: actor.handle, targetId: id.data,
@@ -423,12 +445,18 @@ router.delete("/posts/:id", async (req, res) => {
   const viewer = await requireAdminWrite(req);
   const id = z.uuid().safeParse(req.params.id);
   if (!id.success) throw new AuthError(404, "post_not_found");
+  const { ground } = splitGround(req.body, true);
   const removed = await db.transaction(async (tx) => {
     const [actor] = await tx.select({ role: users.role, handle: users.handle, bannedAt: users.bannedAt }).from(users)
       .where(eq(users.id, viewer.id)).for("share");
     if (actor?.role !== "admin" || actor.bannedAt) throw new AuthError(403, "admin_required");
+    const [before] = await tx.select({ content: posts.content }).from(posts).where(eq(posts.id, id.data));
     const deleted = await removePost(tx, id.data);
     if (!deleted) throw new AuthError(404, "post_not_found");
+    await recordDecision(tx, {
+      userId: deleted.authorId, action: "remove_post", targetType: "post", targetKey: id.data, excerpt: before?.content ?? "",
+      ground: ground!, decidedBy: { id: viewer.id, handle: actor.handle },
+    });
     const [author] = await tx.select({ handle: users.handle }).from(users)
       .where(eq(users.id, deleted.authorId));
     await tx.insert(moderationActivity).values({
@@ -499,6 +527,7 @@ router.delete("/posts/:id/attachments/:kind{/:imageId}", async (req, res) => {
     throw new AuthError(404, "attachment_not_found");
   const attachmentKind = kind.data;
   const imageId = image.data;
+  const { ground } = splitGround(req.body, false);
 
   const voiceKey = await db.transaction(async (tx) => {
     const [actor] = await tx.select({ role: users.role, handle: users.handle, bannedAt: users.bannedAt }).from(users)
@@ -525,6 +554,7 @@ router.delete("/posts/:id/attachments/:kind{/:imageId}", async (req, res) => {
       (!removeVoice && post.voice) || remainingImages.length > 0;
     if (!post.hasText && !keepsAttachment)
       throw new AuthError(409, "attachment_required");
+    if (!ground) throw new AuthError(400, "ground_required");
 
     const fields = {
       gif: removeGif ? null : undefined,
@@ -538,6 +568,11 @@ router.delete("/posts/:id/attachments/:kind{/:imageId}", async (req, res) => {
     if (clearAll && post.hasPoll) await tx.delete(pollVotes).where(eq(pollVotes.postId, id.data));
     const key = removeVoice ? post.voice?.key : undefined;
     if (key) await queueDeletion(tx, key);
+    await recordDecision(tx, {
+      userId: post.authorId, action: "remove_media", targetType: "post", targetKey: id.data,
+      excerpt: `Removed: ${imageId ? "image" : attachmentKind}`,
+      ground, decidedBy: { id: viewer.id, handle: actor.handle },
+    });
     const [author] = await tx.select({ handle: users.handle }).from(users).where(eq(users.id, post.authorId));
     await tx.insert(moderationActivity).values({
       actorId: viewer.id, actorHandle: actor.handle, targetId: id.data,
@@ -568,9 +603,11 @@ router.patch("/users/:id/profile", async (req, res) => {
   const viewer = await requireAdminWrite(req);
   const id = z.uuid().safeParse(req.params.id);
   if (!id.success) throw new AuthError(404, "user_not_found");
-  const input = profileChange.safeParse(req.body);
+  const split = splitGround(req.body, false);
+  const input = profileChange.safeParse(split.rest);
   if (!input.success) throw new AuthError(400, "invalid_profile_change");
   const change = input.data;
+  if (!split.ground && change.action !== "changePronouns") throw new AuthError(400, "ground_required");
   const targetId = id.data.toLowerCase();
 
   const updated = await db.transaction(async (tx) => {
@@ -599,6 +636,16 @@ router.patch("/users/:id/profile", async (req, res) => {
     await tx.insert(moderationActivity).values({
       actorId: actor.id, actorHandle: actor.handle, targetId: target.id, targetHandle: target.handle,
       action: change.action, detail: change.action === "changeUsername" ? `@${target.handle} → @${user.handle}` : null,
+    });
+    if (split.ground) await recordDecision(tx, {
+      userId: target.id,
+      action: change.action.startsWith("clear") ? "clear_profile" : "edit_profile",
+      targetType: "user",
+      targetKey: target.id,
+      excerpt: { clearBio: "Bio removed", clearAvatar: "Avatar removed", clearBanner: "Banner removed", changeUsername: "Username changed",
+        changeName: "Display name changed", changeBio: "Bio changed", changePronouns: "Pronouns changed" }[change.action],
+      ground: split.ground,
+      decidedBy: { id: actor.id, handle: actor.handle },
     });
     return formatUser(user);
   });

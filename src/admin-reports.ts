@@ -11,6 +11,7 @@ import { removePost } from "./post-removal.ts";
 import { reportReasons } from "./reports.ts";
 import { clearProfileMedia, flushMediaDeletions } from "./storage/media-lifecycle.ts";
 import { publishUserPostVisibility } from "./user-removal.ts";
+import { groundSchema, recordDecision } from "./moderation.ts";
 
 const router = Router();
 const pageSize = 25;
@@ -44,6 +45,14 @@ const reportFields = {
   resolvedByHandle: reports.resolvedByHandle,
   resolvedAt: reports.resolvedAt,
   createdAt: reports.createdAt,
+  channel: reports.channel,
+  legalGround: reports.legalGround,
+  notifierName: reports.notifierName,
+  notifierEmail: reports.notifierEmail,
+  goodFaithAt: reports.goodFaithAt,
+  escalatedAt: reports.escalatedAt,
+  escalationAuthority: reports.escalationAuthority,
+  escalationRef: reports.escalationRef,
   openOnTarget: targetReportCount,
 };
 
@@ -154,7 +163,16 @@ const resolution = z.strictObject({
   removeContent: z.boolean().default(false),
   clearProfile: z.array(z.enum(profileParts)).max(profileParts.length).default([]),
   ban: z.strictObject({ reason: z.string().trim().min(1).max(280).refine((value) => !value.includes("\u0000")) }).optional(),
+  ground: groundSchema.optional(),
 });
+
+function snapshotExcerpt(snapshot: unknown) {
+  const value = snapshot as Record<string, unknown> | null;
+  if (!value) return "";
+  if (typeof value.content === "string") return value.content;
+  if (typeof value.bio === "string") return `@${String(value.handle ?? "")} ${String(value.displayName ?? "")}`.trim();
+  return "";
+}
 
 router.post("/:id/resolve", async (req, res) => {
   const viewer = await requireStaffWrite(req);
@@ -190,7 +208,19 @@ router.post("/:id/resolve", async (req, res) => {
     if (accountAction && actor.role !== "admin") throw new AuthError(403, "admin_required");
     if (change.removeContent && !canRemoveReportedContent(actor, report))
       throw new AuthError(403, report.targetType === "post" ? "independent_post_report_required" : "admin_required");
+    if ((change.removeContent || accountAction) && !change.ground) throw new AuthError(400, "ground_required");
     const owner = locked.find((user) => user.id === report.targetUserId);
+    const decide = (action: Parameters<typeof recordDecision>[1]["action"], targetType: "post" | "user" | "message", targetKey: string, excerpt?: string) =>
+      recordDecision(tx, {
+        userId: owner!.id,
+        action,
+        targetType,
+        targetKey,
+        excerpt: excerpt ?? snapshotExcerpt(report.snapshot),
+        ground: change.ground!,
+        reportId: report.id,
+        decidedBy: { id: actor.id, handle: actor.handle },
+      });
 
     const actions: string[] = [];
     const keys: string[] = [];
@@ -204,6 +234,7 @@ router.post("/:id/resolve", async (req, res) => {
         if (removed.voice) keys.push(removed.voice.key);
         actions.push("removed content");
         await log("removePost", report.targetKey, `Report ${report.id}`);
+        if (owner && change.ground) await decide("remove_post", "post", report.targetKey);
       }
     }
     if (change.removeContent && report.targetType === "message" && report.conversationId) {
@@ -212,6 +243,7 @@ router.post("/:id/resolve", async (req, res) => {
         [conversation.firstUserId, conversation.secondUserId])) {
         actions.push("removed message");
         await log("removeMessage", report.targetUserId ?? report.targetKey, `Report ${report.id}`);
+        if (owner && change.ground) await decide("remove_message", "message", report.targetKey);
       }
     }
     if (change.clearProfile.length) {
@@ -223,6 +255,7 @@ router.post("/:id/resolve", async (req, res) => {
         await log({ bio: "clearBio", avatar: "clearAvatar", banner: "clearBanner", name: "clearName" }[part], owner.id);
       }
       actions.push(`cleared ${change.clearProfile.join(", ")}`);
+      if (change.ground) await decide("clear_profile", "user", owner.id, `Cleared: ${change.clearProfile.join(", ")}`);
     }
     if (change.ban) {
       if (!owner) throw new AuthError(404, "user_not_found");
@@ -234,6 +267,7 @@ router.post("/:id/resolve", async (req, res) => {
         await publishUserPostVisibility(tx, owner.id);
         if (!owner.approvedAt) await publishWaitlistChange(tx);
         actions.push("banned user");
+        if (change.ground) await decide("ban", "user", owner.id, change.ban.reason);
       }
     }
 
@@ -251,6 +285,34 @@ router.post("/:id/resolve", async (req, res) => {
     return keys;
   });
   for (const key of mediaKeys) await flushMediaDeletions(key);
+  res.sendStatus(204);
+});
+
+const escalation = z.strictObject({
+  authority: z.string().trim().min(1).max(120).refine((value) => !value.includes("\u0000")),
+  reference: z.string().trim().max(200).refine((value) => !value.includes("\u0000")).default(""),
+});
+
+router.post("/:id/escalate", async (req, res) => {
+  const viewer = await requireStaffWrite(req);
+  const id = z.uuid().safeParse(req.params.id);
+  if (!id.success) throw new AuthError(404, "report_not_found");
+  const input = escalation.safeParse(req.body);
+  if (!input.success) throw new AuthError(400, "invalid_escalation");
+  await db.transaction(async (tx) => {
+    const [report] = await tx.select().from(reports).where(eq(reports.id, id.data)).for("update");
+    if (!report) throw new AuthError(404, "report_not_found");
+    await tx.update(reports).set({
+      escalatedAt: report.escalatedAt ?? new Date(),
+      escalationAuthority: input.data.authority,
+      escalationRef: input.data.reference || null,
+    }).where(eq(reports.id, report.id));
+    await tx.insert(moderationActivity).values({
+      actorId: viewer.id, actorHandle: viewer.handle, targetId: report.targetUserId ?? report.targetKey,
+      targetHandle: report.targetHandle, action: "escalateReport",
+      detail: `Report ${report.id}: ${input.data.authority}${input.data.reference ? ` (${input.data.reference})` : ""}`,
+    });
+  });
   res.sendStatus(204);
 });
 

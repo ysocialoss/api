@@ -9,6 +9,7 @@ import { db } from "./db/index.ts";
 import { postImageFlags, postImages, posts, users } from "./db/schema.ts";
 import { screenImage, withImageModeration } from "./image-moderation.ts";
 import { isAnimatedPng } from "./storage/animated-png.ts";
+import { scanUpload } from "./safety/hash-match.ts";
 
 export const maxPostImages = 4;
 const maxUploadBytes = 8 * 1024 * 1024;
@@ -58,11 +59,12 @@ const draft = isNull(postImages.postId);
 export const postImageUploadBody = express.raw({ type: "application/octet-stream", limit: maxUploadBytes, inflate: false });
 
 export async function processPostImage<T>(
-  { body, uploaderId, filename }: { body: unknown; uploaderId: string; filename: string | undefined },
+  { body, uploaderId, filename, ip }: { body: unknown; uploaderId: string; filename: string | undefined; ip?: string | null },
   save: (data: Buffer) => Promise<T>,
 ): Promise<T> {
   if (!Buffer.isBuffer(body) || !body.length)
     throw new AuthError(400, "invalid_post_image");
+  await scanUpload({ bytes: body, mime: "application/octet-stream", surface: "post_image", uploaderId, ip });
   return withImageModeration(async () => {
     const data = await normalizeImage(body);
     await screenImage({ data, uploaderId, filename: uploadFilename(filename) });
@@ -76,7 +78,7 @@ router.post("/", async (req, res, next) => {
 }, postImageUploadBody, async (req, res) => {
   const uploaderId: string = res.locals.uploaderId;
   const id = await processPostImage(
-    { body: req.body, uploaderId, filename: req.get("x-post-image-name") },
+    { body: req.body, uploaderId, filename: req.get("x-post-image-name"), ip: req.ip },
     (data) => db.transaction(async (tx) => {
       const [uploader] = await tx.select({ approvedAt: users.approvedAt, bannedAt: users.bannedAt })
         .from(users).where(eq(users.id, uploaderId)).for("update");

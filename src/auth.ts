@@ -3,7 +3,8 @@ import { publishAccountChange, publishWaitlistChange } from "./live-events.ts";
 import { serveLiveStream } from "./live.ts";
 import { createHash } from "node:crypto";
 import { Router } from "express";
-import { and, eq, gt, lt } from "drizzle-orm";
+import { and, eq, gt, lt, sql } from "drizzle-orm";
+import { termsVersion } from "./legal.ts";
 import { z } from "zod";
 import { pronounsSchema } from "./pronouns.ts";
 import { db } from "./db/index.ts";
@@ -63,7 +64,7 @@ router.get(["/login", "/admin/login"], async (req, res) => {
     client_id: env.CNS_CLIENT_ID,
     redirect_uri: `${origin}${callbackPath}`,
     response_type: "code",
-    scope: "openid profile users:read",
+    scope: admin ? "openid profile users:read" : "openid profile",
     state,
     nonce,
     code_challenge_method: "S256",
@@ -161,6 +162,9 @@ router.get("/me", async (req, res) => {
       by: session.user.bannedBy,
       byProfileHandle: session.user.bannedByProfileHandle,
     } : null,
+    termsCurrent: session.user ? session.user.termsVersion === termsVersion : null,
+    termsVersion,
+    feedChoiceNeeded: session.user ? session.user.feedChoiceAt === null : false,
     user: session.user,
     avatarUrl: session.user ? session.user.avatarUrl : session.identity.picture,
     suggestedHandle: /^[a-z0-9_]{3,32}$/.test(
@@ -168,6 +172,7 @@ router.get("/me", async (req, res) => {
     )
       ? session.identity.username.toLowerCase()
       : "",
+    suggestedDisplayName: session.user ? undefined : session.identity.displayName.slice(0, 80),
   });
 });
 const navigationItems = z.enum([
@@ -219,14 +224,21 @@ router.post("/profile", async (req, res) => {
   const input = z
     .strictObject({
       handle: z.string().regex(/^[a-z0-9_]{3,32}$/),
+      displayName: z.string().trim().max(80).optional(),
       pronouns: pronounsSchema.optional(),
+      acceptTerms: z.literal(true).optional(),
+      ageConfirmed: z.literal(true).optional(),
     })
     .safeParse(req.body);
   if (!input.success) {
-    if (input.error.issues.some((issue) => issue.path[0] === "pronouns"))
+    if (input.error.issues.some((issue) => issue.path[0] === "acceptTerms" || issue.path[0] === "ageConfirmed"))
+      throw new AuthError(400, "terms_required");
+    if (input.error.issues.some((issue) => issue.path[0] === "pronouns" || issue.path[0] === "displayName"))
       throw new AuthError(400, "invalid_profile");
     throw new AuthError(400, "invalid_handle");
   }
+  if (!input.data.acceptTerms || !input.data.ageConfirmed)
+    throw new AuthError(400, "terms_required");
   const session = await readSession(cookie(req, "session"));
   if (session.kind === "anonymous")
     throw new AuthError(401, "sign_in_required");
@@ -255,8 +267,11 @@ router.post("/profile", async (req, res) => {
       .insert(users)
       .values({
         handle: input.data.handle,
-        displayName: identity.displayName.slice(0, 80),
+        displayName: (input.data.displayName ?? identity.displayName).slice(0, 80),
         pronouns: input.data.pronouns,
+        termsVersion,
+        termsAcceptedAt: new Date(),
+        ageConfirmedAt: new Date(),
       })
       .returning();
     await tx
@@ -275,6 +290,25 @@ router.post("/profile", async (req, res) => {
       avatarUrl: user.avatarUrl,
     },
   });
+});
+router.post("/terms", async (req, res) => {
+  requireOrigin(req);
+  const user = await requireSessionUser(req);
+  const input = z.strictObject({
+    version: z.literal(termsVersion),
+    acceptTerms: z.literal(true),
+    ageConfirmed: z.literal(true),
+  }).safeParse(req.body);
+  if (!input.success) throw new AuthError(400, "terms_required");
+  await db.transaction(async (tx) => {
+    await tx.update(users).set({
+      termsVersion,
+      termsAcceptedAt: new Date(),
+      ageConfirmedAt: sql`coalesce(${users.ageConfirmedAt}, now())`,
+    }).where(eq(users.id, user.id));
+    await publishAccountChange(tx, user.id);
+  });
+  res.sendStatus(204);
 });
 router.post(["/logout", "/admin/logout"], async (req, res) => {
   const origin = req.path.startsWith("/admin/") ? adminOrigin() : env.APP_ORIGIN;

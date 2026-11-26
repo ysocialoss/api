@@ -48,7 +48,7 @@ export async function recordFeedEvent(tx: Transaction, event: {
     select u.id, ${event.type}, ${event.postId ?? null}::uuid, ${event.authorId ?? null}::uuid,
       ${event.context?.surface ?? null}, ${event.context?.position ?? null}::smallint,
       ${event.context?.requestId ?? null}::uuid, ${event.detail ?? null}, 'server'
-    from users u where u.id = ${event.userId}::uuid and u.feed_personalize`);
+    from users u where u.id = ${event.userId}::uuid and u.feed_personalize and u.feed_choice_at is not null`);
 }
 
 const clientEventSchema = z.strictObject({
@@ -73,14 +73,20 @@ const clientEventSchema = z.strictObject({
 });
 export const clientBatchSchema = z.strictObject({
   sessionId: z.uuid().transform((id) => id.toLowerCase()),
-  client: z.enum(["mobile", "desktop"]),
+  client: z.enum(["mobile", "desktop"]).optional(),
   events: z.array(clientEventSchema).min(1).max(50),
 });
 
-export async function ingestClientEvents(userId: string, body: unknown) {
+export function clientKind(req: Pick<Request, "get">): "mobile" | "desktop" {
+  const hint = req.get("sec-ch-ua-mobile");
+  if (hint) return hint.trim() === "?1" ? "mobile" : "desktop";
+  return /Mobi|Android|iPhone|iPad/i.test(req.get("user-agent") ?? "") ? "mobile" : "desktop";
+}
+
+export async function ingestClientEvents(userId: string, body: unknown, client: "mobile" | "desktop") {
   const parsed = clientBatchSchema.safeParse(body);
   if (!parsed.success) throw new AuthError(400, "invalid_feed_events");
-  const { sessionId, client, events } = parsed.data;
+  const { sessionId, events } = parsed.data;
   const records = JSON.stringify(events.map((event) => ({
     type: event.type,
     post_id: event.postId ?? null,
@@ -104,7 +110,7 @@ export async function ingestClientEvents(userId: string, body: unknown) {
     left join posts p on p.id = e.post_id
     where (e.post_id is null or p.id is not null)
       and (p.author_id is null or p.author_id <> ${userId}::uuid)
-      and exists (select 1 from users u where u.id = ${userId}::uuid and u.feed_personalize)
+      and exists (select 1 from users u where u.id = ${userId}::uuid and u.feed_personalize and u.feed_choice_at is not null)
     order by item.n
     on conflict (session_id, seq) where session_id is not null do nothing`);
   try {

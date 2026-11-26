@@ -7,7 +7,7 @@ import { requireApprovedUser, requireUser } from "./auth/request.ts";
 import { AuthError } from "./auth/provider.ts";
 import { followingFeed } from "./feed-entries.ts";
 import { readCursor } from "./posts.ts";
-import { ingestClientEvents } from "./ranking/events.ts";
+import { clientKind, ingestClientEvents } from "./ranking/events.ts";
 
 const router = Router();
 router.use((_req, res, next) => {
@@ -17,7 +17,7 @@ router.use((_req, res, next) => {
 
 router.post("/events", async (req, res) => {
   const user = await requireUser(req);
-  if (user.feedPersonalize) await ingestClientEvents(user.id, req.body);
+  if (user.feedPersonalize && user.feedChoiceAt) await ingestClientEvents(user.id, req.body, clientKind(req));
   res.status(204).end();
 });
 
@@ -30,7 +30,7 @@ router.get("/following", async (req, res) => {
 
 router.get("/preferences", async (req, res) => {
   const user = await requireApprovedUser(req);
-  res.json({ personalize: user.feedPersonalize });
+  res.json({ personalize: user.feedPersonalize, chosen: user.feedChoiceAt !== null });
 });
 
 const preferencesSchema = z.strictObject({ personalize: z.boolean() });
@@ -38,11 +38,15 @@ router.patch("/preferences", async (req, res) => {
   const user = await requireUser(req);
   const input = preferencesSchema.safeParse(req.body);
   if (!input.success) throw new AuthError(400, "invalid_feed_preferences");
-  const [saved] = await db
-    .update(users)
-    .set({ feedPersonalize: input.data.personalize, updatedAt: sql`now()` })
-    .where(eq(users.id, user.id))
-    .returning({ personalize: users.feedPersonalize });
+  const saved = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(users)
+      .set({ feedPersonalize: input.data.personalize, feedChoiceAt: sql`coalesce(${users.feedChoiceAt}, now())`, updatedAt: sql`now()` })
+      .where(eq(users.id, user.id))
+      .returning({ personalize: users.feedPersonalize });
+    const cleared = input.data.personalize ? null : await tx.delete(feedEvents).where(eq(feedEvents.userId, user.id));
+    return { ...row, chosen: true, cleared: cleared?.rowCount ?? 0 };
+  });
   res.json(saved);
 });
 

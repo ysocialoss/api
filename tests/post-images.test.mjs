@@ -125,6 +125,7 @@ test("screens and publishes image drafts, then moderates or cascades their remov
     await once(server, "listening");
     const base = `http://127.0.0.1:${server.address().port}`;
     function request(path, { user, method = "GET", body, type, filename } = {}) {
+      if (path.startsWith("/api/admin/posts/") && method === "DELETE" && body === undefined) body = { ground: { type: "terms", ref: "5.7", facts: "Test decision" } };
       const headers = { Origin: path.startsWith("/api/admin/") ? adminOrigin : appOrigin };
       if (user) headers.Cookie = user.cookie;
       if (body !== undefined) headers["Content-Type"] = type ?? "application/json";

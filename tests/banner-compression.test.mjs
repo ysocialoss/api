@@ -48,22 +48,35 @@ await test("compression keeps the aspect ratio so saved crops still fit", async 
   assert.equal(metadata.width / metadata.height, 4);
 });
 
-await test("a result that is not smaller never replaces the upload", async () => {
+await test("a tiny still banner is re-encoded instead of stored as uploaded", async () => {
   const tiny = await sharp({
     create: { width: 1, height: 1, channels: 3, background: "#16dc64" },
   })
     .png()
     .toBuffer();
   const banner = await normalizeBanner(tiny);
-  assert.equal(banner.extension, "png");
-  assert.deepEqual(banner.body, tiny);
+  assert.ok(["png", "avif"].includes(banner.extension));
+  assert.equal(banner.animated, false);
 });
 
-await test("small animations stay as uploaded", async () => {
+await test("small animations stay gifs but are re-encoded", async () => {
   const gif = await readFile(new URL("./fixtures/banner.gif", import.meta.url));
   const banner = await normalizeBanner(gif);
   assert.equal(banner.extension, "gif");
-  assert.deepEqual(banner.body, gif);
+  assert.equal(banner.animated, true);
+  assert.equal((await sharp(banner.body, { animated: true }).metadata()).pages, 24);
+});
+
+await test("location and camera metadata never survive any banner path", async () => {
+  const exif = { IFD0: { Make: "LeakCam", Model: "GPS-1" }, IFD3: { GPSLatitudeRef: "N", GPSLatitude: "53/1 36/1 0/1" } };
+  for (const size of [[2400, 1200], [8, 8]]) {
+    const input = await sharp(await photo(size[0], size[1], "jpeg")).withExif(exif).jpeg({ quality: 95 }).toBuffer();
+    assert.ok((await sharp(input).metadata()).exif, "fixture carries exif");
+    const banner = await normalizeBanner(input);
+    const metadata = await sharp(banner.body).metadata();
+    assert.equal(metadata.exif, undefined);
+    assert.ok(!banner.body.includes(Buffer.from("LeakCam")));
+  }
 });
 
 await test("wide animations stay animated and get smaller", async () => {

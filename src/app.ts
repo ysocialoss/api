@@ -29,6 +29,11 @@ import pg from "pg";
 import admin from "./admin.ts";
 import reports from "./reports.ts";
 import feed from "./feed.ts";
+import legal from "./legal.ts";
+import dataExport from "./data-export.ts";
+import gifMedia from "./gif-media.ts";
+import { userModeration } from "./moderation.ts";
+import { startRetention } from "./retention.ts";
 import blocks from "./blocks.ts";
 import auth from "./auth.ts";
 import { pool } from "./db/index.ts";
@@ -36,6 +41,7 @@ import { connectWithRetry } from "./db/connect.ts";
 import { env } from "./config.ts";
 
 export const app = express();
+if (env.TRUST_PROXY) app.set("trust proxy", env.TRUST_PROXY.split(",").map((value) => value.trim()).filter(Boolean));
 
 let startupReady = !import.meta.main;
 app.use((_req, res, next) => {
@@ -64,6 +70,10 @@ app.use("/api/admin", admin);
 app.use("/api/blocks", blocks);
 app.use("/api/posts", posts);
 app.use("/api/feed", feed);
+app.use("/api/legal", legal);
+app.use("/api/me", dataExport);
+app.use("/api/gifs", gifMedia);
+app.use("/api/moderation", userModeration);
 app.use("/api/post-images", postImages);
 app.use("/api/og", og);
 app.use("/api/live", live);
@@ -128,6 +138,7 @@ if (import.meta.main) {
   let stopPushDelivery = () => {};
   let stopLiveEvents = () => {};
   let stopGithubRefresh = () => {};
+  let stopRetention = () => {};
   const server = app.listen(env.PORT, () =>
     console.info(`API listening on port ${env.PORT}`),
   );
@@ -147,6 +158,7 @@ if (import.meta.main) {
       stopLiveEvents();
       dmSocket.stop();
       stopGithubRefresh();
+      stopRetention();
       setTimeout(() => {
         server.close(() => { void pool.end(); });
         server.closeIdleConnections();
@@ -208,6 +220,11 @@ if (import.meta.main) {
       to_regclass('public.github_link_attempts') IS NOT NULL AND
       to_regclass('public.github_contribution_jobs') IS NOT NULL AND
       to_regclass('public.feed_events') IS NOT NULL AND
+      to_regclass('public.moderation_decisions') IS NOT NULL AND
+      to_regclass('public.moderation_appeals') IS NOT NULL AND
+      to_regclass('public.deleted_accounts') IS NOT NULL AND
+      to_regclass('public.csam_incidents') IS NOT NULL AND
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'terms_version') AND
       to_regclass('public.posts_author_idx') IS NOT NULL AND
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'feed_personalize') AND
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'post_likes' AND column_name = 'created_at') AS ready`);
@@ -224,6 +241,7 @@ if (import.meta.main) {
     stopPushDelivery = startPushDelivery();
     stopLiveEvents = startLiveEvents(dmSocket);
     stopGithubRefresh = startGithubRefresh();
+    stopRetention = startRetention();
     startupReady = true;
   } catch (error) {
     if (!shutdown.signal.aborted) {

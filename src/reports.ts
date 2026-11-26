@@ -7,6 +7,9 @@ import { db } from "./db/index.ts";
 import { dmConversations, dmMessages, posts, reports, users, type ReportSnapshot } from "./db/schema.ts";
 import { readFeedContext, recordFeedEvent } from "./ranking/events.ts";
 import { avatarUrlSelection, publicProfileSelection } from "./user-data.ts";
+import { legalCategories } from "./legal.ts";
+import { hash, random } from "./auth/secrets.ts";
+import { env } from "./config.ts";
 
 export const reportReasons = [
   "spam", "harassment", "hate", "violence", "sexual", "self_harm", "misinformation", "impersonation", "illegal", "other",
@@ -17,9 +20,12 @@ const windowLimit = 20;
 
 const plain = (max: number) => z.string().max(max).refine((value) => !value.includes("\u0000"));
 const messageText = z.strictObject({ id: z.uuid(), text: plain(4000) });
+export const illegalDetailsMin = 30;
 const reportInput = z.strictObject({
   reason: z.enum(reportReasons),
   details: plain(1000).trim().default(""),
+  legalGround: z.enum(legalCategories).optional(),
+  goodFaith: z.literal(true).optional(),
   target: z.discriminatedUnion("type", [
     z.strictObject({ type: z.literal("post"), id: z.uuid() }),
     z.strictObject({ type: z.literal("user"), id: z.uuid() }),
@@ -140,7 +146,8 @@ router.post("/", async (req, res) => {
   const viewer = await requireUser(req);
   const input = reportInput.safeParse(req.body);
   if (!input.success) throw new AuthError(400, "invalid_report");
-  const { target, reason, details } = input.data;
+  const { target, reason, details, legalGround, goodFaith } = input.data;
+  if (reason === "illegal" && (details.length < illegalDetailsMin || !goodFaith)) throw new AuthError(400, "illegal_notice_incomplete");
   const [recent] = await db.select({ total: count() }).from(reports)
     .where(and(eq(reports.reporterId, viewer.id), gte(reports.createdAt, new Date(Date.now() - windowMs))));
   if (recent.total >= windowLimit) throw new AuthError(429, "report_rate_limited");
@@ -157,6 +164,8 @@ router.post("/", async (req, res) => {
     conversationId: resolved.conversationId,
     reason,
     details,
+    legalGround: reason === "illegal" ? legalGround ?? null : null,
+    goodFaithAt: goodFaith ? new Date() : null,
     snapshot: resolved.snapshot,
   }).onConflictDoNothing().returning({ id: reports.id });
   if (created && target.type !== "message")
@@ -167,7 +176,94 @@ router.post("/", async (req, res) => {
       authorId: resolved.userId,
       context: readFeedContext(req),
     }));
-  res.status(created ? 201 : 200).json({ status: created ? "reported" : "already_reported" });
+  res.status(created ? 201 : 200).json({ status: created ? "reported" : "already_reported", reference: created?.id ?? null });
+});
+
+const publicWindow = new Map<string, number[]>();
+const publicLimit = 5;
+function publicRateLimit(key: string) {
+  const now = Date.now();
+  const recent = (publicWindow.get(key) ?? []).filter((at) => now - at < windowMs);
+  if (recent.length >= publicLimit) throw new AuthError(429, "report_rate_limited");
+  recent.push(now);
+  publicWindow.set(key, recent);
+  if (publicWindow.size > 10_000) publicWindow.clear();
+}
+
+const csamCategory = "child_sexual_abuse";
+const publicInput = z.strictObject({
+  url: plain(500).trim(),
+  reason: z.enum(reportReasons),
+  legalGround: z.enum(legalCategories).optional(),
+  details: plain(1000).trim().min(illegalDetailsMin),
+  name: plain(120).trim().optional(),
+  email: z.email().max(254).optional(),
+  goodFaith: z.literal(true),
+});
+
+async function resolvePublicTarget(value: string) {
+  let url: URL;
+  try {
+    url = new URL(value, env.APP_ORIGIN);
+  } catch {
+    throw new AuthError(400, "invalid_report_url");
+  }
+  if (url.origin !== env.APP_ORIGIN) throw new AuthError(400, "invalid_report_url");
+  const post = /^\/posts\/([0-9a-fA-F-]{36})\/?$/.exec(url.pathname);
+  if (post) return { type: "post" as const, target: await postTarget("", post[1].toLowerCase()) };
+  const profile = /^\/@([a-zA-Z0-9_]{3,32})\/?$/.exec(url.pathname);
+  if (profile) {
+    const [user] = await db.select({ id: users.id }).from(users).where(eq(users.handle, profile[1].toLowerCase()));
+    if (!user) throw new AuthError(404, "user_not_found");
+    return { type: "user" as const, target: await userTarget("", user.id) };
+  }
+  throw new AuthError(400, "invalid_report_url");
+}
+
+router.post("/public", async (req, res) => {
+  const input = publicInput.safeParse(req.body);
+  if (!input.success) throw new AuthError(400, "invalid_report");
+  const notice = input.data;
+  const anonymousAllowed = notice.reason === "illegal" && notice.legalGround === csamCategory;
+  if (!anonymousAllowed && (!notice.name || !notice.email)) throw new AuthError(400, "notifier_contact_required");
+  publicRateLimit(req.ip ?? "unknown");
+  const { type, target } = await resolvePublicTarget(notice.url);
+  const token = random();
+  const [created] = await db.insert(reports).values({
+    reporterId: null,
+    reporterHandle: "",
+    channel: "public",
+    targetType: type,
+    targetKey: target.key,
+    targetUserId: target.userId,
+    targetHandle: target.handle,
+    conversationId: null,
+    reason: notice.reason,
+    details: notice.details,
+    legalGround: notice.reason === "illegal" ? notice.legalGround ?? null : null,
+    notifierName: notice.name ?? null,
+    notifierEmail: notice.email ?? null,
+    goodFaithAt: new Date(),
+    statusTokenHash: hash(token),
+    snapshot: target.snapshot,
+  }).returning({ id: reports.id, createdAt: reports.createdAt });
+  res.status(201).json({ reference: created.id, receivedAt: created.createdAt, statusToken: token });
+});
+
+router.get("/status/:token", async (req, res) => {
+  const token = z.string().min(16).max(128).safeParse(req.params.token);
+  if (!token.success) throw new AuthError(404, "report_not_found");
+  const [report] = await db.select({
+    reference: reports.id,
+    targetType: reports.targetType,
+    reason: reports.reason,
+    status: reports.status,
+    actionTaken: sql<boolean>`${reports.status} = 'resolved' and ${reports.resolution} <> 'resolved without action'`,
+    resolvedAt: reports.resolvedAt,
+    receivedAt: reports.createdAt,
+  }).from(reports).where(eq(reports.statusTokenHash, hash(token.data)));
+  if (!report) throw new AuthError(404, "report_not_found");
+  res.json(report);
 });
 
 export default router;

@@ -52,6 +52,15 @@ export const env = z
         .optional(),
     ),
     // set on staging so unreleased changelog entries show as "coming soon".
+    OPERATOR_NAME: z.string().trim().min(1).optional(),
+    OPERATOR_ADDRESS: z.string().trim().min(1).optional(),
+    OPERATOR_EMAIL: z.email().optional(),
+    OPERATOR_PHONE: z.string().trim().min(1).optional(),
+    PRIVACY_EMAIL: z.email().optional(),
+    ABUSE_EMAIL: z.email().optional(),
+    PHOTODNA_URL: z.url({ protocol: /^https?$/ }).optional(),
+    PHOTODNA_KEY: z.string().min(1).optional(),
+    TRUST_PROXY: z.string().optional(),
     CHANGELOG_SHOW_UNRELEASED: z.stringbool().default(false),
     NODE_ENV: z
       .enum(["development", "test", "production"])
