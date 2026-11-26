@@ -8,6 +8,7 @@ import { userHandles, users } from "./db/schema.ts";
 import { findPost } from "./posts.ts";
 import { avatarDataUri, renderPostCard } from "./og/post-card.ts";
 import { renderProfileCard } from "./og/profile-card.ts";
+import { PngCache } from "./og/png-cache.ts";
 import {
   metaPage,
   postMeta,
@@ -22,8 +23,8 @@ import { postCountSelection, publicProfileSelection, userSelection } from "./use
 
 const router = Router();
 
-const cache = new Map<string, { png: Buffer; at: number }>();
 const cacheMs = 5 * 60_000;
+const cache = new PngCache(300, 32 * 1024 * 1024, cacheMs);
 
 router.use("/posts/:id", (req, _res, next) => {
   const id = req.params.id.replace(/\.png$/, "");
@@ -31,7 +32,7 @@ router.use("/posts/:id", (req, _res, next) => {
   next();
 });
 
-const profileCache = new Map<string, { png: Buffer; at: number }>();
+const profileCache = new PngCache(300, 32 * 1024 * 1024, cacheMs);
 const handleSchema = z.string().regex(/^[a-z0-9_]{3,32}$/);
 
 router.use("/profiles/:handle", (req, _res, next) => {
@@ -76,12 +77,10 @@ async function avatarFor(avatarUrl: string | null) {
 router.get("/posts/:id.png", async (req, res) => {
   const id = req.params.id;
   const post = await findPost(id);
-  const hit = cache.get(id);
-  let png = hit && Date.now() - hit.at < cacheMs ? hit.png : undefined;
+  let png = cache.get(id);
   if (!png) {
     png = await renderPostCard(post, await avatarFor(post.author.avatarUrl));
-    if (cache.size >= 300) cache.delete(cache.keys().next().value!);
-    cache.set(id, { png, at: Date.now() });
+    cache.set(id, png);
   }
   res
     .set({
@@ -102,13 +101,11 @@ router.get("/posts/:id", async (req, res) => {
 
 router.get("/profiles/:handle.png", async (req, res) => {
   const handle = req.params.handle.toLowerCase();
-  const hit = profileCache.get(handle);
-  let png = hit && Date.now() - hit.at < cacheMs ? hit.png : undefined;
+  let png = profileCache.get(handle);
   if (!png) {
     const profile = await findOgProfile(handle);
     png = await renderProfileCard(profile, await avatarFor(profile.avatarUrl));
-    if (profileCache.size >= 300) profileCache.delete(profileCache.keys().next().value!);
-    profileCache.set(handle, { png, at: Date.now() });
+    profileCache.set(handle, png);
   }
   res
     .set({
