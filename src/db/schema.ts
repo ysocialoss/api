@@ -814,3 +814,24 @@ export const changelogEntries = pgTable("changelog_entries", {
   check("changelog_entries_title_check", sql`char_length(${table.title}) between 1 and 120`),
   check("changelog_entries_body_check", sql`char_length(${table.body}) <= 4000`),
 ]);
+
+export const adventDoors = pgTable("advent_doors", {
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  year: integer().notNull(),
+  day: integer().notNull(),
+  openedAt: timestamp("opened_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.userId, table.year, table.day] }),
+  check("advent_doors_day_check", sql`${table.day} between 1 and 24`),
+]);
+
+export const adventRewards = pgTable("advent_rewards", {
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  year: integer().notNull(),
+  day: integer().notNull(),
+  enabled: boolean().notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.userId, table.year, table.day] }),
+  check("advent_rewards_day_check", sql`${table.day} in (7, 14, 24)`),
+]);

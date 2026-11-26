@@ -505,6 +505,20 @@
       "when": 1795684280919,
       "tag": "0071_dm_attachments_drop_legacy",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1795725810868,
+      "tag": "0072_advent_calendar",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1795730891277,
+      "tag": "0073_advent_rewards",
+      "breakpoints": true
     }
   ]
 }

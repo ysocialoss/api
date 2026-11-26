@@ -20,6 +20,7 @@ import changelog from "./changelog.ts";
 import topics from "./topics.ts";
 import search from "./search.ts";
 import paints from "./paints.ts";
+import advent from "./advent.ts";
 import dms from "./dms.ts";
 import { attachDmSocket } from "./dm-socket.ts";
 import { startPushDelivery } from "./push-delivery.ts";
@@ -71,6 +72,7 @@ app.use("/api/search", search);
 app.use("/api/dms", dms);
 app.use("/api/profiles", profiles);
 app.use("/api/paints", paints);
+app.use("/api/advent", advent);
 app.use("/api/github", github);
 app.use("/api/connections", connectionRoutes);
 app.use("/api/domains", domainRoutes);
@@ -205,6 +207,8 @@ if (import.meta.main) {
       to_regclass('public.profile_pins') IS NOT NULL AND
       to_regclass('public.github_connections') IS NOT NULL AND
       to_regclass('public.github_link_attempts') IS NOT NULL AND
+      to_regclass('public.advent_doors') IS NOT NULL AND
+      to_regclass('public.advent_rewards') IS NOT NULL AND
       to_regclass('public.github_contribution_jobs') IS NOT NULL AS ready`);
     if (!schema.rows[0]?.ready) {
       throw new Error(

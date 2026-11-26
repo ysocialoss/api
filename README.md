@@ -81,6 +81,9 @@ When you add an API error string, add it there too, in the matching range.
 | YS-3002 | `invalid_profile` | The profile details failed validation. |
 | YS-3003 | `invalid_handle` | The handle is malformed or unavailable. |
 | YS-3004 | `cannot_follow_self` | The caller tried to follow their own profile. |
+| YS-3008 | `invalid_advent_door` | The advent calendar year or door number is malformed. |
+| YS-3009 | `advent_door_closed` | The advent calendar door is not open today, either still locked or already past. |
+| YS-3010 | `advent_reward_not_found` | The advent calendar reward has not been received yet, so it cannot be switched on. |
 
 ## 4xxx: Paging, inbox and push
 
