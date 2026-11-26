@@ -6,10 +6,10 @@ import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
 import { requireUser, readViewerId } from "./auth/request.ts";
 import { db } from "./db/index.ts";
-import { mediaDeletions, postImageFlags, postImages, posts, users } from "./db/schema.ts";
+import { postImageFlags, postImages, posts, users } from "./db/schema.ts";
 import { screenImage, withImageModeration } from "./image-moderation.ts";
 import { isAnimatedPng } from "./storage/animated-png.ts";
-import { flushMediaDeletions, stageMediaUpload } from "./storage/media-lifecycle.ts";
+import { claimStagedUpload, discardStagedUpload, stageMediaUpload } from "./storage/media-lifecycle.ts";
 import { getAvatar, requireAvatarStorage } from "./storage/r2.ts";
 
 type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -70,15 +70,11 @@ export async function savePostImage<T>(
   await stageMediaUpload(objectKey, data, outputType);
   try {
     return await db.transaction(async (tx) => {
-      const [staged] = await tx.delete(mediaDeletions)
-        .where(and(eq(mediaDeletions.key, objectKey), gt(mediaDeletions.availableAt, new Date())))
-        .returning({ key: mediaDeletions.key });
-      if (!staged) throw new AuthError(503, "avatar_storage_unavailable");
+      await claimStagedUpload(tx, objectKey);
       return await insert(tx, { objectKey });
     });
   } catch (error) {
-    await db.update(mediaDeletions).set({ availableAt: new Date() }).where(eq(mediaDeletions.key, objectKey));
-    await flushMediaDeletions(objectKey);
+    await discardStagedUpload(objectKey);
     throw error;
   }
 }

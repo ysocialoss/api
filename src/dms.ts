@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, exists, gt, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import express, { Router, type Request } from "express";
 import { alias } from "drizzle-orm/pg-core";
@@ -5,7 +6,9 @@ import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
 import { requireApprovedUser, requireUser } from "./auth/request.ts";
 import { db } from "./db/index.ts";
-import { dmAttachments, dmConversations, dmDevices, dmMessages, dmPollVotes, dmReactions, notifications, users } from "./db/schema.ts";
+import { dmAttachments, dmConversations, dmDevices, dmMessages, dmPollVotes, dmReactions, mediaDeletions, notifications, users } from "./db/schema.ts";
+import { discardStagedUpload, stageMediaUpload } from "./storage/media-lifecycle.ts";
+import { getAvatar, requireAvatarStorage } from "./storage/r2.ts";
 import {
   deviceAction, deviceApproval, deviceLimit, deviceRevocation, directoryLimit, identifier,
   messageInput, messageProof, newDevice, parseInput, pendingLifetime, validDeviceAccess, validDeviceKeys, validSignature,
@@ -598,8 +601,11 @@ router.post("/conversations/:id/messages", async (req, res) => {
       const [linked] = await tx.update(dmAttachments).set({ messageId: input.id }).where(and(
         eq(dmAttachments.id, attachmentId), eq(dmAttachments.conversationId, id),
         eq(dmAttachments.uploaderId, viewer.id), isNull(dmAttachments.messageId),
-      )).returning({ id: dmAttachments.id });
+        gt(dmAttachments.createdAt, linkable()),
+      )).returning({ objectKey: dmAttachments.objectKey });
       if (!linked) throw new AuthError(409, "dm_attachment_unavailable");
+      // The staged upload's pending deletion is cancelled once a message owns it.
+      await tx.delete(mediaDeletions).where(eq(mediaDeletions.key, linked.objectKey));
     }
     await tx.update(dmConversations).set({ lastMessageAt: now, firstHiddenAt: null, secondHiddenAt: null }).where(eq(dmConversations.id, id));
     const recipientId = peerOf(conversation, viewer.id);
@@ -744,15 +750,19 @@ router.get("/link-preview-icon", async (req, res) => {
 });
 
 const unsent = () => new Date(Date.now() - 60 * 60_000);
+// Staged objects are deleted an hour after upload unless linked; stop linking a little earlier.
+const linkable = () => new Date(Date.now() - 50 * 60_000);
 
 router.post("/conversations/:id/attachments", express.raw({ type: "application/octet-stream", limit: attachmentLimit }), async (req, res) => {
   const viewer = await requireUser(req);
   const id = parseInput(identifier, req.params.id);
   const attachmentId = parseInput(identifier, req.get("x-dm-attachment-id"));
+  await requireDeviceAccess(req, viewer.id, parseInput(identifier, req.query.device), attachmentId);
   const data = req.body;
   if (!Buffer.isBuffer(data) || data.length < 29) throw new AuthError(400, "invalid_dm_request");
+  requireAvatarStorage();
   const conversation = await readConversation(viewer.id, id);
-  await db.transaction(async (tx) => {
+  const admit = async (tx: Transaction) => {
     requireAvailableAccounts(await lockAccounts(tx, participants(conversation)), viewer.id);
     const current = await tx.query.dmConversations.findFirst({ where: eq(dmConversations.id, id) });
     if (current?.inviteStatus === "declined") throw new AuthError(403, "dm_blocked");
@@ -761,9 +771,25 @@ router.post("/conversations/:id/attachments", express.raw({ type: "application/o
     const [pendingCount] = await tx.select({ value: sql<number>`count(*)::int` }).from(dmAttachments)
       .where(and(eq(dmAttachments.uploaderId, viewer.id), isNull(dmAttachments.messageId)));
     if ((pendingCount?.value ?? 0) >= 10) throw new AuthError(429, "dm_attachment_limit");
-    await tx.insert(dmAttachments).values({ id: attachmentId, conversationId: id, uploaderId: viewer.id, data, size: data.length })
-      .onConflictDoNothing();
-  });
+  };
+  // Check before spending an upload, then again when the row is written.
+  await db.transaction(admit);
+  // The server picks the object key, so a reused attachment id can never overwrite another file.
+  const key = `dm-attachments/${randomUUID()}.bin`;
+  await stageMediaUpload(key, data, "application/octet-stream");
+  try {
+    const stored = await db.transaction(async (tx) => {
+      await admit(tx);
+      return (await tx.insert(dmAttachments)
+        .values({ id: attachmentId, conversationId: id, uploaderId: viewer.id, objectKey: key, size: data.length })
+        .onConflictDoNothing().returning({ id: dmAttachments.id })).length > 0;
+    });
+    // A retried upload keeps the first copy.
+    if (!stored) await discardStagedUpload(key);
+  } catch (error) {
+    await discardStagedUpload(key);
+    throw error;
+  }
   res.status(201).json({ id: attachmentId });
 });
 
@@ -771,10 +797,12 @@ router.get("/conversations/:id/attachments/:attachmentId", async (req, res) => {
   const viewer = await requireApprovedUser(req);
   const { id, attachmentId } = parseInput(z.strictObject({ id: identifier, attachmentId: identifier }), req.params);
   await readConversation(viewer.id, id);
-  const [file] = await db.select({ data: dmAttachments.data }).from(dmAttachments)
+  const [file] = await db.select({ objectKey: dmAttachments.objectKey }).from(dmAttachments)
     .where(and(eq(dmAttachments.id, attachmentId), eq(dmAttachments.conversationId, id), isNotNull(dmAttachments.messageId)));
   if (!file) throw new AuthError(404, "dm_attachment_not_found");
-  res.set({ "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff" }).type("application/octet-stream").send(file.data);
+  const body = Buffer.from(await getAvatar(file.objectKey));
+  res.set({ "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff", "Content-Length": String(body.length) })
+    .type("application/octet-stream").send(body);
 });
 
 export default router;

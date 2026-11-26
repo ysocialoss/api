@@ -164,6 +164,8 @@ if (import.meta.main) {
       to_regclass('public.media_deletions') IS NOT NULL AND
       to_regclass('public.voice_jobs') IS NOT NULL AND
       EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = to_regclass('public.posts') AND tgname = 'posts_voice_cleanup' AND tgenabled IN ('O', 'A')) AND
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'dm_attachments' AND column_name = 'object_key' AND is_nullable = 'NO') AND
+      EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = to_regclass('public.dm_attachments') AND tgname = 'dm_attachments_object_cleanup' AND tgenabled IN ('O', 'A')) AND
       to_regclass('public.posts') IS NOT NULL AND
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'posts' AND column_name = 'gif') AND
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'posts' AND column_name = 'voice') AND

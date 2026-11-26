@@ -193,10 +193,12 @@ export const dmAttachments = pgTable("dm_attachments", {
   conversationId: uuid("conversation_id").notNull().references(() => dmConversations.id, { onDelete: "cascade" }),
   uploaderId: uuid("uploader_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   messageId: uuid("message_id").references(() => dmMessages.id, { onDelete: "cascade" }),
-  data: dmBlob().notNull(),
+  objectKey: text("object_key").notNull().unique(),
   size: integer().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => [index("dm_attachments_message_idx").on(table.messageId)]);
+}, (table) => [
+  index("dm_attachments_message_idx").on(table.messageId),
+]);
 
 export const oauthTransactions = pgTable("oauth_transactions", {
   state: text().primaryKey(),
