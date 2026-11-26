@@ -20,6 +20,7 @@ import changelog from "./changelog.ts";
 import topics from "./topics.ts";
 import search from "./search.ts";
 import paints from "./paints.ts";
+import advent from "./advent.ts";
 import dms from "./dms.ts";
 import { attachDmSocket } from "./dm-socket.ts";
 import { startPushDelivery } from "./push-delivery.ts";
@@ -84,6 +85,7 @@ app.use("/api/search", search);
 app.use("/api/dms", dms);
 app.use("/api/profiles", profiles);
 app.use("/api/paints", paints);
+app.use("/api/advent", advent);
 app.use("/api/github", github);
 app.use("/api/connections", connectionRoutes);
 app.use("/api/domains", domainRoutes);
@@ -179,6 +181,8 @@ if (import.meta.main) {
       to_regclass('public.media_deletions') IS NOT NULL AND
       to_regclass('public.voice_jobs') IS NOT NULL AND
       EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = to_regclass('public.posts') AND tgname = 'posts_voice_cleanup' AND tgenabled IN ('O', 'A')) AND
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'dm_attachments' AND column_name = 'object_key' AND is_nullable = 'NO') AND
+      EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = to_regclass('public.dm_attachments') AND tgname = 'dm_attachments_object_cleanup' AND tgenabled IN ('O', 'A')) AND
       to_regclass('public.posts') IS NOT NULL AND
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'posts' AND column_name = 'gif') AND
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'posts' AND column_name = 'voice') AND
@@ -218,6 +222,8 @@ if (import.meta.main) {
       to_regclass('public.profile_pins') IS NOT NULL AND
       to_regclass('public.github_connections') IS NOT NULL AND
       to_regclass('public.github_link_attempts') IS NOT NULL AND
+      to_regclass('public.advent_doors') IS NOT NULL AND
+      to_regclass('public.advent_rewards') IS NOT NULL AND
       to_regclass('public.github_contribution_jobs') IS NOT NULL AND
       to_regclass('public.feed_events') IS NOT NULL AND
       to_regclass('public.moderation_decisions') IS NOT NULL AND

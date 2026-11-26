@@ -1,6 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
+import { hasTooManyBlankLines } from "./blank-lines.ts";
 import type { db } from "./db/index.ts";
 import { postEdits, posts } from "./db/schema.ts";
 import { affectedPostIds, publishLiveChange } from "./live-events.ts";
@@ -11,7 +12,7 @@ export const postContentSchema = z.strictObject({
   content: z.string().trim()
     .refine((value) => !value.includes("\u0000"))
     .refine(
-      (value) => !/(?:^|\n)(?:[^\S\n]*\n){3}/.test(value.replace(/\r\n?|[\u2028\u2029]/g, "\n")),
+      (value) => !hasTooManyBlankLines(value),
       "Use at most two blank lines in a row.",
     )
     .refine((value) => Array.from(value).length <= 2000),

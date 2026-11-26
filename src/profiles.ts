@@ -18,11 +18,13 @@ import { removeUser, revokeProviderSessions } from "./user-removal.ts";
 import { profileReposts } from "./feed-entries.ts";
 import { AuthError } from "./auth/provider.ts";
 import { postSelection, serializePost } from "./post-data.ts";
-import { banDetailsSelection, githubProfileSelection, postCountSelection, publicProfileSelection, userSelection } from "./user-data.ts";
+import { banDetailsSelection, githubProfileSelection, postCountSelection, profileCosmeticsSelection, publicProfileSelection, userSelection } from "./user-data.ts";
 import { recordNotification } from "./notification-events.ts";
 import { readFeedContext, recordFeedEvent } from "./ranking/events.ts";
 import { blockState, notBlockedSql, requireNotBlocked } from "./blocks.ts";
 import { badgeIconDirectory, isBadgeIcon } from "./profile-badges.ts";
+import { displayNameSchema } from "./display-name.ts";
+import { hasTooManyBlankLines } from "./blank-lines.ts";
 import { generalPronounRecommendations, pronounRecommendations, pronounsLimit, pronounsSchema } from "./pronouns.ts";
 
 const router = Router();
@@ -69,8 +71,8 @@ router.patch("/me", async (req, res) => {
   const input = z
     .strictObject({
       handle: handleSchema,
-      displayName: z.string().trim().min(1).max(80),
-      bio: z.string().max(160),
+      displayName: displayNameSchema,
+      bio: z.string().max(160).refine((value) => !hasTooManyBlankLines(value)),
       pronouns: pronounsSchema,
     })
     .partial()
@@ -142,6 +144,7 @@ router.get("/:handle/card", async (req, res) => {
       bannerUrl: sql<
         string | null
       >`case when ${users.bannerKey} is null then ${users.bannerExternalUrl} else '/api/' || ${users.bannerKey} end`,
+      cosmetics: profileCosmeticsSelection,
       createdAt: users.createdAt,
       followerCount: sql<number>`(select count(*)::int from ${userFollows} where ${userFollows.followingId} = ${users.id})`,
       followingCount: sql<number>`(select count(*)::int from ${userFollows} where ${userFollows.followerId} = ${users.id})`,
@@ -237,6 +240,7 @@ router.get("/:handle", async (req, res) => {
       postCount: postCountSelection,
       isOg: sql<boolean>`${users.role} = 'og'`,
       badges: users.badges,
+      cosmetics: profileCosmeticsSelection,
       github: githubProfileSelection,
       createdAt: users.createdAt,
       ...banDetailsSelection,

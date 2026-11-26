@@ -1,9 +1,9 @@
 import type { PoolClient } from "pg";
 import { sweepUnusedMedia } from "./media-sweep.ts";
 import { DeleteObjectCommand } from "@aws-sdk/client-s3";
-import { and, desc, eq, inArray, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import { createDatabase, db, pool } from "../db/index.ts";
-import { avatarHistory, mediaDeletions, moderationActivity, posts, users } from "../db/schema.ts";
+import { avatarHistory, dmAttachments, mediaDeletions, moderationActivity, postImages, posts, users } from "../db/schema.ts";
 import { AuthError } from "../auth/provider.ts";
 import type { BannerCrop } from "./banner-crop.ts";
 import { avatarStorage, putAvatar } from "./r2.ts";
@@ -23,14 +23,24 @@ export async function stageMediaUpload(
   try {
     await putAvatar(key, body, contentType);
   } catch (error) {
-    await db
-      .update(mediaDeletions)
-      .set({ availableAt: new Date() })
-      .where(eq(mediaDeletions.key, key));
-    await flushMediaDeletions(key);
+    await discardStagedUpload(key);
     throw error;
   }
   return pending.availableAt;
+}
+
+/** Deletes a staged object now, for an upload whose row was never saved. */
+export async function discardStagedUpload(key: string) {
+  await db.update(mediaDeletions).set({ availableAt: new Date() }).where(eq(mediaDeletions.key, key));
+  await flushMediaDeletions(key);
+}
+
+/** Cancels a staged object's pending deletion so a row can own it; fails once it has expired. */
+export async function claimStagedUpload(tx: Pick<typeof db, "delete">, key: string) {
+  const [staged] = await tx.delete(mediaDeletions)
+    .where(and(eq(mediaDeletions.key, key), gt(mediaDeletions.availableAt, new Date())))
+    .returning({ key: mediaDeletions.key });
+  if (!staged) throw new AuthError(503, "avatar_storage_unavailable");
 }
 
 export const recentAvatarLimit = 5;
@@ -233,7 +243,12 @@ export async function flushMediaDeletions(key?: string, database = db) {
               .limit(1);
         const [voicePost] = job.key.startsWith("voices/") ? await tx.select({ id: posts.id }).from(posts)
           .where(eq(sql`${posts.voice}->>'key'`, job.key)).limit(1) : [];
-        if (!active && !kept && !voicePost) {
+        const [postImage] = job.key.startsWith("post-images/") ? await tx.select({ id: postImages.id })
+          .from(postImages).where(eq(postImages.objectKey, job.key)).limit(1) : [];
+        // A sent DM attachment keeps its object; unsent ones are removed when their staging expires.
+        const [dmFile] = job.key.startsWith("dm-attachments/") ? await tx.select({ id: dmAttachments.id })
+          .from(dmAttachments).where(and(eq(dmAttachments.objectKey, job.key), isNotNull(dmAttachments.messageId))).limit(1) : [];
+        if (!active && !kept && !voicePost && !postImage && !dmFile) {
           try {
             // Deleting an already absent key succeeds, including after a crash.
             await client.send(

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { fakeR2 } from "./helpers/fake-r2.mjs";
 import { generateKeyPairSync, randomBytes, randomUUID, sign } from "node:crypto";
 import { once } from "node:events";
 import test from "node:test";
@@ -57,7 +58,10 @@ test("DMs preserve legacy notifications and update live readers across API repli
     process.env.DATABASE_URL = url.href;
     process.env.NODE_ENV = "test";
     const vapid = webpush.generateVAPIDKeys();
-    Object.assign(process.env, { VAPID_PUBLIC_KEY: vapid.publicKey, VAPID_PRIVATE_KEY: vapid.privateKey, VAPID_SUBJECT: "mailto:test@example.com" });
+    Object.assign(process.env, {
+      VAPID_PUBLIC_KEY: vapid.publicKey, VAPID_PRIVATE_KEY: vapid.privateKey, VAPID_SUBJECT: "mailto:test@example.com",
+      R2_ACCOUNT_ID: "a".repeat(32), R2_BUCKET: "dm-attachment-tests", R2_ACCESS_KEY_ID: "test-access-key", R2_SECRET_ACCESS_KEY: "test-secret-key",
+    });
     const { flushPushDeliveries } = await import("../src/push-delivery.ts");
     const { db, pool: appPool } = await import("../src/db/index.ts");
     pool = appPool;
@@ -66,6 +70,9 @@ test("DMs preserve legacy notifications and update live readers across API repli
     const { hash } = await import("../src/auth/secrets.ts");
     const { startLiveEvents } = await import("../src/live-events.ts");
     const { attachDmSocket } = await import("../src/dm-socket.ts");
+    const { avatarStorage } = await import("../src/storage/r2.ts");
+    const { flushMediaDeletions } = await import("../src/storage/media-lifecycle.ts");
+    const objects = fakeR2(t, avatarStorage, { keys: /^dm-attachments\/[0-9a-f-]{36}\.bin$/ });
     await migrate(db, { migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)) });
     main = app.listen(0, "127.0.0.1");
     replica = app.listen(0, "127.0.0.1");
@@ -371,10 +378,14 @@ test("DMs preserve legacy notifications and update live readers across API repli
       await vote(alice, null);
       assert.deepEqual((await fetchOne(bob)).message.votes, [{ userId: bob.id, option: 0 }]);
 
-      const upload = async (user, bytes, attachmentId = randomUUID(), conversation = path) => {
-        const response = await fetch(base + conversation + "/attachments", {
+      const upload = async (user, bytes, attachmentId = randomUUID(), { conversation = path, signed = true } = {}) => {
+        const target = conversation + "/attachments?device=" + user.device.id;
+        const response = await fetch(base + target, {
           method: "POST", body: bytes,
-          headers: { Cookie: "session=" + user.token, Origin: env.APP_ORIGIN, "Content-Type": "application/octet-stream", "X-DM-Attachment-Id": attachmentId },
+          headers: {
+            Cookie: "session=" + user.token, Origin: env.APP_ORIGIN, "Content-Type": "application/octet-stream", "X-DM-Attachment-Id": attachmentId,
+            ...(signed ? user.device.access("POST", target, attachmentId) : {}),
+          },
         });
         return { status: response.status, attachmentId };
       };
@@ -384,8 +395,17 @@ test("DMs preserve legacy notifications and update live readers across API repli
       };
       const ciphertext = randomBytes(300);
       assert.equal((await upload(alice, randomBytes(8))).status, 400);
+      assert.equal((await upload(alice, ciphertext, randomUUID(), { signed: false })).status, 403);
+      assert.equal((await upload(alice, Buffer.alloc(25 * 1024 * 1024 + 1))).status, 413);
+      const before = objects.size;
       const { status, attachmentId } = await upload(alice, ciphertext);
       assert.equal(status, 201);
+      assert.equal(objects.size, before + 1, "ciphertext is stored in R2");
+      const { rows: [stored] } = await pool.query("SELECT object_key FROM dm_attachments WHERE id = $1", [attachmentId]);
+      assert.ok(objects.get(stored.object_key).equals(ciphertext));
+      // Retrying the same id keeps the first copy and drops the duplicate.
+      assert.equal((await upload(alice, randomBytes(300), attachmentId)).status, 201);
+      assert.equal(objects.size, before + 1);
       assert.equal((await download(bob, attachmentId)).status, 404);
       const voice = alice.device.message(id, [alice.device, bob.device]);
       await request(alice, path + "/messages", { method: "POST", body: { ...voice, attachmentId: randomUUID() }, status: 409 });
@@ -394,8 +414,12 @@ test("DMs preserve legacy notifications and update live readers across API repli
       assert.equal(received.status, 200);
       assert.ok(received.bytes.equals(ciphertext));
       assert.equal((await download(carol, attachmentId)).status, 404);
+      const { rows: pending } = await pool.query("SELECT 1 FROM media_deletions WHERE key = $1", [stored.object_key]);
+      assert.equal(pending.length, 0, "sent attachments are not scheduled for deletion");
       await request(alice, path + "/messages/" + voice.id, { method: "DELETE", status: 204 });
       assert.equal((await download(bob, attachmentId)).status, 404);
+      await flushMediaDeletions(stored.object_key);
+      assert.ok(!objects.has(stored.object_key), "erased attachments leave R2");
       await request(alice, path + "/messages/" + poll.id, { method: "DELETE", status: 204 });
     });
 

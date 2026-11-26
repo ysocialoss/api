@@ -10,6 +10,12 @@ import { postImageFlags, postImages, posts, users } from "./db/schema.ts";
 import { screenImage, withImageModeration } from "./image-moderation.ts";
 import { isAnimatedPng } from "./storage/animated-png.ts";
 import { scanUpload } from "./safety/hash-match.ts";
+import { claimStagedUpload, discardStagedUpload, stageMediaUpload } from "./storage/media-lifecycle.ts";
+import { getAvatar, requireAvatarStorage } from "./storage/r2.ts";
+
+type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+// `data` only exists on rows from before the R2 move, until the backfill clears it.
+type StoredImage = { data: Buffer | null; objectKey: string | null };
 
 export const maxPostImages = 4;
 const maxUploadBytes = 8 * 1024 * 1024;
@@ -45,9 +51,33 @@ function uploadFilename(header: string | undefined) {
   }
 }
 
-export function sendPostImage(res: Response, data: Buffer) {
+export const storedImage = { data: postImages.data, objectKey: postImages.objectKey };
+
+export async function sendPostImage(res: Response, image: StoredImage) {
+  const data = image.objectKey ? Buffer.from(await getAvatar(image.objectKey)) : image.data;
+  if (!data) throw new AuthError(404, "post_image_not_found");
   res.set({ "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
   res.type(outputType).send(data);
+}
+
+// Uploads to R2, then hands `insert` the key to save in the same transaction that claims
+// the staged object. Deleting the row later queues the object for removal through the
+// post_images_object_cleanup trigger.
+export async function savePostImage<T>(
+  data: Buffer,
+  insert: (tx: Transaction, image: { objectKey: string }) => Promise<T>,
+): Promise<T> {
+  const objectKey = `post-images/${randomUUID()}.avif`;
+  await stageMediaUpload(objectKey, data, outputType);
+  try {
+    return await db.transaction(async (tx) => {
+      await claimStagedUpload(tx, objectKey);
+      return await insert(tx, { objectKey });
+    });
+  } catch (error) {
+    await discardStagedUpload(objectKey);
+    throw error;
+  }
 }
 
 const router = express.Router();
@@ -65,6 +95,7 @@ export async function processPostImage<T>(
   if (!Buffer.isBuffer(body) || !body.length)
     throw new AuthError(400, "invalid_post_image");
   await scanUpload({ bytes: body, mime: "application/octet-stream", surface: "post_image", uploaderId, ip });
+  requireAvatarStorage();
   return withImageModeration(async () => {
     const data = await normalizeImage(body);
     await screenImage({ data, uploaderId, filename: uploadFilename(filename) });
@@ -79,7 +110,7 @@ router.post("/", async (req, res, next) => {
   const uploaderId: string = res.locals.uploaderId;
   const id = await processPostImage(
     { body: req.body, uploaderId, filename: req.get("x-post-image-name"), ip: req.ip },
-    (data) => db.transaction(async (tx) => {
+    (data) => savePostImage(data, async (tx, image) => {
       const [uploader] = await tx.select({ approvedAt: users.approvedAt, bannedAt: users.bannedAt })
         .from(users).where(eq(users.id, uploaderId)).for("update");
       if (!uploader?.approvedAt || uploader.bannedAt) throw new AuthError(403, "post_image_upload_forbidden");
@@ -88,7 +119,7 @@ router.post("/", async (req, res, next) => {
         .where(and(eq(postImages.uploaderId, uploaderId), draft, gt(postImages.expiresAt, now)));
       if (pending.value >= 16) throw new AuthError(429, "post_image_draft_limit");
       const [saved] = await tx.insert(postImages)
-        .values({ uploaderId, data, expiresAt: new Date(now.getTime() + draftLifetimeMs) })
+        .values({ uploaderId, ...image, expiresAt: new Date(now.getTime() + draftLifetimeMs) })
         .returning({ id: postImages.id });
       return saved.id;
     }),
@@ -99,19 +130,19 @@ router.post("/", async (req, res, next) => {
 router.get("/:id", async (req, res) => {
   const id = z.uuid().safeParse(req.params.id);
   if (!id.success) throw new AuthError(404, "post_image_not_found");
-  const [published] = await db.select({ data: postImages.data }).from(postImages)
+  const [published] = await db.select(storedImage).from(postImages)
     .innerJoin(users, eq(users.id, postImages.uploaderId))
     .innerJoin(posts, eq(posts.id, postImages.postId))
     .where(and(eq(postImages.id, id.data), isNull(users.bannedAt), isNull(posts.hiddenAt)));
-  if (published) return sendPostImage(res, published.data);
+  if (published) return sendPostImage(res, published);
 
   const viewerId = await readViewerId(req);
-  const [owned] = viewerId ? await db.select({ data: postImages.data }).from(postImages)
+  const [owned] = viewerId ? await db.select(storedImage).from(postImages)
     .innerJoin(users, eq(users.id, postImages.uploaderId))
     .where(and(eq(postImages.id, id.data), eq(postImages.uploaderId, viewerId), draft,
       gt(postImages.expiresAt, new Date()), isNull(users.bannedAt))) : [];
   if (!owned) throw new AuthError(404, "post_image_not_found");
-  sendPostImage(res, owned.data);
+  await sendPostImage(res, owned);
 });
 
 router.delete("/:id", async (req, res) => {

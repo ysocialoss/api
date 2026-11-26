@@ -1,5 +1,5 @@
 import { getTableName, type SQL, sql, type SQLWrapper, type Table } from "drizzle-orm";
-import { authIdentities, githubConnections, paints, posts, userFollows, users } from "./db/schema.ts";
+import { adventRewards, authIdentities, githubConnections, paints, posts, userFollows, users } from "./db/schema.ts";
 import type { PaintDefinition } from "./paint-schema.ts";
 
 export const githubProfileSelection = {
@@ -63,3 +63,8 @@ export const publicProfileSelection = {
   followerCount: sql<number>`(select count(*)::int from ${userFollows} where ${userFollows.followingId} = ${users.id})`,
   followingCount: sql<number>`(select count(*)::int from ${userFollows} where ${userFollows.followerId} = ${users.id})`,
 };
+
+export const profileCosmeticsSelection = sql<{ year: number; day: number }[]>`coalesce((
+  select json_agg(json_build_object('year', r.year, 'day', r.day) order by r.year, r.day)
+  from ${adventRewards} r where r.user_id = ${users.id} and r.enabled
+), '[]'::json)`;

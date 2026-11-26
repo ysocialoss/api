@@ -1,12 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, gt } from "drizzle-orm";
 import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
 import { env } from "./config.ts";
 import { db } from "./db/index.ts";
-import { mediaDeletions, postImageFlags } from "./db/schema.ts";
-import { stageMediaUpload } from "./storage/media-lifecycle.ts";
-import { avatarStorage } from "./storage/r2.ts";
+import { postImageFlags } from "./db/schema.ts";
+import { claimStagedUpload, stageMediaUpload } from "./storage/media-lifecycle.ts";
 
 const imageType = "image/avif";
 const scanner = new URL("/v1/detect", env.NSFW_CHECK_URL ?? (
@@ -53,25 +51,12 @@ async function checkImage(data: Buffer<ArrayBuffer>) {
 async function recordFlag({
   uploaderId, filename, confidence, data,
 }: Pick<typeof postImageFlags.$inferInsert, "uploaderId" | "filename" | "confidence"> & { data: Buffer }) {
-  const flag = { uploaderId, filename, confidence };
-  if (avatarStorage) {
-    const objectKey = `flagged-images/${randomUUID()}.avif`;
-    try {
-      await stageMediaUpload(objectKey, data, imageType);
-      await db.transaction(async (tx) => {
-        const [staged] = await tx.delete(mediaDeletions)
-          .where(and(eq(mediaDeletions.key, objectKey), gt(mediaDeletions.availableAt, new Date())))
-          .returning({ key: mediaDeletions.key });
-        if (!staged) throw new AuthError(503, "avatar_storage_unavailable");
-        await tx.insert(postImageFlags).values({ ...flag, objectKey });
-      });
-      return;
-    } catch (error) {
-      if (!(error instanceof AuthError) || error.code !== "avatar_storage_unavailable") throw error;
-      console.warn({ event: "post_image_flag_storage_unavailable" });
-    }
-  }
-  await db.insert(postImageFlags).values({ ...flag, data });
+  const objectKey = `flagged-images/${randomUUID()}.avif`;
+  await stageMediaUpload(objectKey, data, imageType);
+  await db.transaction(async (tx) => {
+    await claimStagedUpload(tx, objectKey);
+    await tx.insert(postImageFlags).values({ uploaderId, filename, confidence, objectKey });
+  });
 }
 
 export async function screenImage({ data, uploaderId, filename = null }: {

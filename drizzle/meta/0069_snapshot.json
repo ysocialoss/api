@@ -1,5 +1,5 @@
 {
-  "id": "8cbdc9ec-0f51-4dc0-8973-35431de9f120",
+  "id": "9d5b3e18-8ed6-4ae9-a8e0-a2f367d7ff0e",
   "prevId": "77a858a0-5931-4e93-9d10-e5c56c4d18d2",
   "version": "7",
   "dialect": "postgresql",
@@ -1261,288 +1261,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.feed_events": {
-      "name": "feed_events",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "bigint",
-          "primaryKey": true,
-          "notNull": true,
-          "identity": {
-            "type": "always",
-            "name": "feed_events_id_seq",
-            "schema": "public",
-            "increment": "1",
-            "startWith": "1",
-            "minValue": "1",
-            "maxValue": "9223372036854775807",
-            "cache": "1",
-            "cycle": false
-          }
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "type": {
-          "name": "type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "post_id": {
-          "name": "post_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "author_id": {
-          "name": "author_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "surface": {
-          "name": "surface",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "position": {
-          "name": "position",
-          "type": "smallint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "request_id": {
-          "name": "request_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "session_id": {
-          "name": "session_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "seq": {
-          "name": "seq",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "value": {
-          "name": "value",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "detail": {
-          "name": "detail",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "client": {
-          "name": "client",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "origin": {
-          "name": "origin",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "client_at": {
-          "name": "client_at",
-          "type": "timestamp (3) with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp (3) with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "feed_events_user_idx": {
-          "name": "feed_events_user_idx",
-          "columns": [
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": false,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "feed_events_post_idx": {
-          "name": "feed_events_post_idx",
-          "columns": [
-            {
-              "expression": "post_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "type",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "feed_events_author_idx": {
-          "name": "feed_events_author_idx",
-          "columns": [
-            {
-              "expression": "author_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"feed_events\".\"author_id\" is not null",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "feed_events_created_idx": {
-          "name": "feed_events_created_idx",
-          "columns": [
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "brin",
-          "with": {}
-        },
-        "feed_events_session_seq_idx": {
-          "name": "feed_events_session_seq_idx",
-          "columns": [
-            {
-              "expression": "session_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "seq",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"feed_events\".\"session_id\" is not null",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "feed_events_user_id_users_id_fk": {
-          "name": "feed_events_user_id_users_id_fk",
-          "tableFrom": "feed_events",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "feed_events_post_id_posts_id_fk": {
-          "name": "feed_events_post_id_posts_id_fk",
-          "tableFrom": "feed_events",
-          "tableTo": "posts",
-          "columnsFrom": [
-            "post_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "feed_events_author_id_users_id_fk": {
-          "name": "feed_events_author_id_users_id_fk",
-          "tableFrom": "feed_events",
-          "tableTo": "users",
-          "columnsFrom": [
-            "author_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "feed_events_type_check": {
-          "name": "feed_events_type_check",
-          "value": "\"feed_events\".\"type\" in ('impression', 'dwell', 'open', 'detail_dwell', 'expand', 'spoiler', 'media_open', 'link_open', 'profile_open', 'voice_play', 'share', 'topic_open', 'like', 'unlike', 'reply', 'quote', 'repost', 'unrepost', 'save', 'unsave', 'poll_vote', 'follow', 'unfollow', 'block', 'report', 'more', 'less', 'snooze', 'topic_more', 'topic_less')"
-        },
-        "feed_events_surface_check": {
-          "name": "feed_events_surface_check",
-          "value": "\"feed_events\".\"surface\" is null or \"feed_events\".\"surface\" in ('for_you', 'following', 'latest', 'thread', 'profile', 'topic', 'search', 'saved', 'other')"
-        },
-        "feed_events_client_check": {
-          "name": "feed_events_client_check",
-          "value": "\"feed_events\".\"client\" is null or \"feed_events\".\"client\" in ('mobile', 'desktop')"
-        },
-        "feed_events_origin_check": {
-          "name": "feed_events_origin_check",
-          "value": "\"feed_events\".\"origin\" in ('client', 'server', 'backfill')"
-        },
-        "feed_events_detail_check": {
-          "name": "feed_events_detail_check",
-          "value": "\"feed_events\".\"detail\" is null or char_length(\"feed_events\".\"detail\") <= 253"
-        },
-        "feed_events_session_check": {
-          "name": "feed_events_session_check",
-          "value": "(\"feed_events\".\"session_id\" is null) = (\"feed_events\".\"seq\" is null)"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.github_connections": {
       "name": "github_connections",
       "schema": "",
@@ -2623,7 +2341,13 @@
           "name": "data",
           "type": "bytea",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
+        },
+        "object_key": {
+          "name": "object_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "expires_at": {
           "name": "expires_at",
@@ -2710,9 +2434,22 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "post_images_object_key_unique": {
+          "name": "post_images_object_key_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "object_key"
+          ]
+        }
+      },
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "post_images_one_image": {
+          "name": "post_images_one_image",
+          "value": "num_nonnulls(\"post_images\".\"data\", \"post_images\".\"object_key\") = 1"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.post_likes": {
@@ -2730,13 +2467,6 @@
           "type": "uuid",
           "primaryKey": false,
           "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp (3) with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
         }
       },
       "indexes": {
@@ -3302,33 +3032,6 @@
         "posts_feed_idx": {
           "name": "posts_feed_idx",
           "columns": [
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": false,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": false,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "posts_author_idx": {
-          "name": "posts_author_idx",
-          "columns": [
-            {
-              "expression": "author_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
             {
               "expression": "created_at",
               "isExpression": false,
@@ -4660,13 +4363,6 @@
           "type": "timestamp (3) with time zone",
           "primaryKey": false,
           "notNull": false
-        },
-        "feed_personalize": {
-          "name": "feed_personalize",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
         },
         "created_at": {
           "name": "created_at",

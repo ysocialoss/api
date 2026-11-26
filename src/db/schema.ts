@@ -200,10 +200,12 @@ export const dmAttachments = pgTable("dm_attachments", {
   conversationId: uuid("conversation_id").notNull().references(() => dmConversations.id, { onDelete: "cascade" }),
   uploaderId: uuid("uploader_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   messageId: uuid("message_id").references(() => dmMessages.id, { onDelete: "cascade" }),
-  data: dmBlob().notNull(),
+  objectKey: text("object_key").notNull().unique(),
   size: integer().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => [index("dm_attachments_message_idx").on(table.messageId)]);
+}, (table) => [
+  index("dm_attachments_message_idx").on(table.messageId),
+]);
 
 export const oauthTransactions = pgTable("oauth_transactions", {
   state: text().primaryKey(),
@@ -378,9 +380,12 @@ export const postImages = pgTable("post_images", {
   id: uuid().defaultRandom().primaryKey(),
   uploaderId: uuid("uploader_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   postId: uuid("post_id").references(() => posts.id, { onDelete: "cascade" }),
-  data: dmBlob().notNull(),
+  // Legacy rows and deployments without R2 keep bytes here; everything else lives in R2.
+  data: dmBlob(),
+  objectKey: text("object_key").unique(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 }, (table) => [
+  check("post_images_one_image", sql`num_nonnulls(${table.data}, ${table.objectKey}) = 1`),
   index("post_images_post_idx").on(table.postId),
   index("post_images_draft_uploader_idx").on(table.uploaderId).where(sql`${table.postId} IS NULL`),
   index("post_images_draft_expiry_idx").on(table.expiresAt).where(sql`${table.postId} IS NULL`),
@@ -951,4 +956,25 @@ export const csamIncidents = pgTable("csam_incidents", {
 }, (table) => [
   index("csam_incidents_created_idx").on(table.createdAt.desc()),
   check("csam_incidents_surface_check", sql`${table.surface} in ('post_image', 'avatar', 'banner', 'flag')`),
+]);
+
+export const adventDoors = pgTable("advent_doors", {
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  year: integer().notNull(),
+  day: integer().notNull(),
+  openedAt: timestamp("opened_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.userId, table.year, table.day] }),
+  check("advent_doors_day_check", sql`${table.day} between 1 and 24`),
+]);
+
+export const adventRewards = pgTable("advent_rewards", {
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  year: integer().notNull(),
+  day: integer().notNull(),
+  enabled: boolean().notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.userId, table.year, table.day] }),
+  check("advent_rewards_day_check", sql`${table.day} in (7, 14, 24)`),
 ]);

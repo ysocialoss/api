@@ -7,6 +7,7 @@ import { and, eq, gt, lt, sql } from "drizzle-orm";
 import { termsVersion } from "./legal.ts";
 import { z } from "zod";
 import { pronounsSchema } from "./pronouns.ts";
+import { displayNameOr } from "./display-name.ts";
 import { db } from "./db/index.ts";
 import {
   authIdentities,
@@ -267,7 +268,7 @@ router.post("/profile", async (req, res) => {
       .insert(users)
       .values({
         handle: input.data.handle,
-        displayName: (input.data.displayName ?? identity.displayName).slice(0, 80),
+        displayName: displayNameOr(input.data.displayName ?? identity.displayName, input.data.handle),
         pronouns: input.data.pronouns,
         termsVersion,
         termsAcceptedAt: new Date(),
