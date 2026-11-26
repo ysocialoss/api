@@ -1,11 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, gt } from "drizzle-orm";
 import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
 import { env } from "./config.ts";
 import { db } from "./db/index.ts";
-import { mediaDeletions, postImageFlags } from "./db/schema.ts";
-import { stageMediaUpload } from "./storage/media-lifecycle.ts";
+import { postImageFlags } from "./db/schema.ts";
+import { claimStagedUpload, stageMediaUpload } from "./storage/media-lifecycle.ts";
 
 const imageType = "image/avif";
 const scanner = new URL("/v1/detect", env.NSFW_CHECK_URL ?? (
@@ -55,10 +54,7 @@ async function recordFlag({
   const objectKey = `flagged-images/${randomUUID()}.avif`;
   await stageMediaUpload(objectKey, data, imageType);
   await db.transaction(async (tx) => {
-    const [staged] = await tx.delete(mediaDeletions)
-      .where(and(eq(mediaDeletions.key, objectKey), gt(mediaDeletions.availableAt, new Date())))
-      .returning({ key: mediaDeletions.key });
-    if (!staged) throw new AuthError(503, "avatar_storage_unavailable");
+    await claimStagedUpload(tx, objectKey);
     await tx.insert(postImageFlags).values({ uploaderId, filename, confidence, objectKey });
   });
 }

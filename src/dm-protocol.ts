@@ -3,7 +3,7 @@ import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
 
 export const deviceLimit = 8;
-export const attachmentLimit = 3 * 1024 * 1024;
+export const attachmentLimit = 25 * 1024 * 1024;
 export const requestLimit = 3;
 export const directoryLimit = 128;
 export const pendingLifetime = 15 * 60_000;

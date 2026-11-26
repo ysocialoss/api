@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
+import { fakeR2 } from "./helpers/fake-r2.mjs";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { config } from "dotenv";
@@ -79,27 +79,11 @@ test("screens and publishes image drafts, then moderates or cascades their remov
     const { hash } = await import("../src/auth/secrets.ts");
     const { avatarStorage } = await import("../src/storage/r2.ts");
     const { flushMediaDeletions } = await import("../src/storage/media-lifecycle.ts");
-    const objects = new Map();
     let failDeletes = false;
-    t.mock.method(avatarStorage.client.config.requestHandler, "handle", async (req) => {
-      const key = decodeURIComponent(req.path.split("/").slice(-2).join("/"));
-      assert.match(key, /^(flagged-images|post-images)\/[0-9a-f-]{36}\.avif$/);
-      assert.match(req.hostname, /\.eu\.r2\.cloudflarestorage\.com$/);
-      if (req.method === "PUT") {
-        assert.equal(req.headers["content-type"], "image/avif");
-        objects.set(key, Buffer.from(req.body));
-      } else if (req.method === "DELETE") {
-        if (failDeletes) throw new Error("Simulated R2 deletion failure");
-        objects.delete(key);
-      } else {
-        assert.equal(req.method, "GET");
-        assert.ok(objects.has(key));
-      }
-      return { response: {
-        statusCode: req.method === "DELETE" ? 204 : 200,
-        headers: {},
-        body: Readable.from([req.method === "GET" ? objects.get(key) : Buffer.alloc(0)]),
-      } };
+    const objects = fakeR2(t, avatarStorage, {
+      keys: /^(flagged-images|post-images)\/[0-9a-f-]{36}\.avif$/,
+      onPut: (req) => assert.equal(req.headers["content-type"], "image/avif"),
+      onDelete: () => { if (failDeletes) throw new Error("Simulated R2 deletion failure"); },
     });
     await migrate(db, { migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)) });
     async function createUser(handle, role = "user") {

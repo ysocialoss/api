@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { fakeR2 } from "./helpers/fake-r2.mjs";
 import { createHmac, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -74,78 +75,24 @@ await test("avatar upload, persistence, access, and failures", async (t) => {
   const { hash } = await import("../src/auth/secrets.ts");
   let server;
   const uploaded = [];
-  const objects = new Map();
   let failWrites = false;
   let holdVoiceWrite;
   let failDeletes = false;
-  if (!live) {
-    // Only replace the external storage transport. HTTP, authentication, PostgreSQL,
-    // image decoding, AWS request serialization, and all response paths are real.
-    t.mock.method(
-      avatarStorage.client.config.requestHandler,
-      "handle",
-      async (request) => {
-        assert.match(request.hostname, /\.eu\.r2\.cloudflarestorage\.com$/);
-        if (request.query?.["list-type"] === "2") {
-          const prefix = request.query.prefix;
-          const xml = `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>false</IsTruncated>${[
-            ...objects.keys(),
-          ]
-            .filter((key) => key.startsWith(prefix))
-            .map(
-              (key) =>
-                `<Contents><Key>${key}</Key><LastModified>2020-01-01T00:00:00.000Z</LastModified></Contents>`,
-            )
-            .join("")}</ListBucketResult>`;
-          return {
-            response: {
-              statusCode: 200,
-              headers: { "content-type": "application/xml" },
-              body: Readable.from([Buffer.from(xml)]),
-            },
-          };
-        }
-        const key = decodeURIComponent(
-          request.path.match(/(?:avatars|banners|voices|flagged-images)\/.+$/)[0],
-        );
-        if (request.method === "PUT") {
-          if (failWrites) throw new Error("Simulated R2 outage");
-          if (key.startsWith("voices/")) await holdVoiceWrite;
-          assert.equal(
-            request.headers["content-type"],
-            key.endsWith(".m4a")
-              ? "audio/mp4"
-              : key.endsWith(".gif")
-              ? "image/gif"
-              : key.endsWith(".png")
-                ? "image/png"
-                : key.endsWith(".webp")
-                  ? "image/webp"
-                  : "image/avif",
-          );
-          assert.equal(request.headers["cache-control"], "no-store");
-          objects.set(key, Buffer.from(request.body));
-        }
-        if (request.method === "DELETE") {
-          if (failDeletes) throw new Error("Simulated deletion outage");
-          objects.delete(key);
-        }
-        const body =
-          request.method === "GET" ? objects.get(key) : Buffer.alloc(0);
-        return {
-          response: {
-            statusCode: 200,
-            headers: {
-              "content-type": key.endsWith(".avif")
-                ? "image/avif"
-                : "image/png",
-            },
-            body: Readable.from([body]),
-          },
-        };
-      },
-    );
-  }
+  // Only replace the external storage transport. HTTP, authentication, PostgreSQL,
+  // image decoding, AWS request serialization, and all response paths are real.
+  const objects = live ? new Map() : fakeR2(t, avatarStorage, {
+    keys: /^(avatars|banners|voices|flagged-images)\/.+$/,
+    allowMissing: true,
+    onPut: async (request, key) => {
+      if (failWrites) throw new Error("Simulated R2 outage");
+      if (key.startsWith("voices/")) await holdVoiceWrite;
+      const extension = key.split(".").pop();
+      assert.equal(request.headers["content-type"],
+        { m4a: "audio/mp4", gif: "image/gif", png: "image/png", webp: "image/webp" }[extension] ?? "image/avif");
+      assert.equal(request.headers["cache-control"], "no-store");
+    },
+    onDelete: () => { if (failDeletes) throw new Error("Simulated deletion outage"); },
+  });
   try {
     await migrate(db, {
       migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)),
