@@ -268,7 +268,7 @@ test("feed activity is logged, gated by personalization, and the following feed 
     });
 
     await t.test("the migration backfill is idempotent and dates likes from notifications", async () => {
-      const sql = await readFile(new URL("../drizzle/0069_feed_events.sql", import.meta.url), "utf8");
+      const sql = await readFile(new URL("../drizzle/0074_feed_events.sql", import.meta.url), "utf8");
       const statements = sql.split("--> statement-breakpoint").map((part) => part.trim());
       const likeUpdate = statements.find((part) => part.startsWith('UPDATE "post_likes"'));
       const backfill = statements.filter((part) => part.startsWith('INSERT INTO "feed_events"'));
