@@ -62,6 +62,7 @@ export const env = z
     PHOTODNA_URL: blank(z.url({ protocol: /^https?$/ })),
     PHOTODNA_KEY: blank(z.string().min(1)),
     TRUST_PROXY: blank(z.string()),
+    CLIENT_IP_HEADER: blank(z.string().regex(/^[A-Za-z0-9-]+$/)),
     // set on staging so unreleased changelog entries show as "coming soon".
     CHANGELOG_SHOW_UNRELEASED: z.stringbool().default(false),
     NODE_ENV: z

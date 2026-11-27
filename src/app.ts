@@ -32,6 +32,8 @@ import reports from "./reports.ts";
 import feed from "./feed.ts";
 import legal from "./legal.ts";
 import contact from "./contact.ts";
+import ipaddr from "ipaddr.js";
+import { isIP } from "node:net";
 import dataExport from "./data-export.ts";
 import gifMedia from "./gif-media.ts";
 import { userModeration } from "./moderation.ts";
@@ -43,7 +45,27 @@ import { connectWithRetry } from "./db/connect.ts";
 import { env } from "./config.ts";
 
 export const app = express();
-if (env.TRUST_PROXY) app.set("trust proxy", env.TRUST_PROXY.split(",").map((value) => value.trim()).filter(Boolean));
+if (env.TRUST_PROXY) {
+  const hops = Number(env.TRUST_PROXY);
+  app.set("trust proxy", Number.isInteger(hops) ? hops : env.TRUST_PROXY.split(",").map((value) => value.trim()).filter(Boolean));
+}
+
+if (env.CLIENT_IP_HEADER) {
+  const header = env.CLIENT_IP_HEADER;
+  const trustedRanges = new Set(["private", "loopback", "uniqueLocal", "linkLocal", "carrierGradeNat"]);
+  const trustedPeer = (address: string | undefined) => {
+    try {
+      return address !== undefined && trustedRanges.has(ipaddr.process(address).range());
+    } catch {
+      return false;
+    }
+  };
+  app.use((req, _res, next) => {
+    const value = req.get(header)?.trim();
+    if (value && isIP(value) && trustedPeer(req.socket.remoteAddress)) Object.defineProperty(req, "ip", { value, configurable: true });
+    next();
+  });
+}
 
 let startupReady = !import.meta.main;
 app.use((_req, res, next) => {

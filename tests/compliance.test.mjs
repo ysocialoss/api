@@ -35,6 +35,7 @@ test("legal, data rights, moderation transparency and safety", async (t) => {
       PHOTODNA_URL: "",
       PHOTODNA_KEY: "",
       TRUST_PROXY: "",
+      CLIENT_IP_HEADER: "CF-Connecting-IP",
     });
     database = await import("../src/db/index.ts");
     const { app } = await import("../src/app.ts");
@@ -108,9 +109,11 @@ test("legal, data rights, moderation transparency and safety", async (t) => {
       assert.equal((await query("SELECT count(*)::int AS total FROM contact_messages")).rows[0].total, 2);
       assert.equal((await call(null, "POST", "/api/contact", message)).status, 204);
       assert.equal((await call(null, "POST", "/api/contact", message)).status, 429);
+      assert.equal((await call(null, "POST", "/api/contact", message, "http://localhost:3000", { "CF-Connecting-IP": "not-an-ip" })).status, 429);
+      assert.equal((await call(null, "POST", "/api/contact", message, "http://localhost:3000", { "CF-Connecting-IP": "203.0.113.9" })).status, 204);
       assert.equal((await adminCall(moderator, "GET", "/api/admin/contact")).status, 403);
       const listed = await (await adminCall(admin, "GET", "/api/admin/contact")).json();
-      assert.equal(listed.messages.length, 3);
+      assert.equal(listed.messages.length, 4);
       const stored = listed.messages.find((item) => item.email);
       assert.equal(stored.name, "Visitor");
       assert.equal((await adminCall(moderator, "PATCH", `/api/admin/contact/${stored.id}`, { handled: true })).status, 403);
