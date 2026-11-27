@@ -13,7 +13,7 @@ router.use((_req, res, next) => {
 });
 
 const HOUR = 3_600_000;
-export const rewardDays = [7, 14, 24];
+export const rewardDays = [1, 7, 14];
 
 export function doorIsOpenable(year: number, day: number, at: Date) {
   const start = Date.UTC(year, 11, day) - 14 * HOUR;

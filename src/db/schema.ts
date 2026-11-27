@@ -976,7 +976,7 @@ export const adventRewards = pgTable("advent_rewards", {
   createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
 }, (table) => [
   primaryKey({ columns: [table.userId, table.year, table.day] }),
-  check("advent_rewards_day_check", sql`${table.day} in (7, 14, 24)`),
+  check("advent_rewards_day_check", sql`${table.day} in (1, 7, 14, 24)`),
 ]);
 
 export const contactMessages = pgTable("contact_messages", {
