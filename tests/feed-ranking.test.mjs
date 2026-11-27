@@ -247,18 +247,9 @@ test("ranked feed: modes, paging, exclusions, shadow logging, fallback and admin
       assert.ok(system.feed.errors24h >= 1);
 
       const current = await json(await call(moderator, "GET", "/api/admin/feed/config", undefined, "http://localhost:3200"));
-      const next = { ...current.config, epsilon: 0.05 };
-      assert.equal((await call(moderator, "PUT", "/api/admin/feed/config", { config: next }, "http://localhost:3200")).status, 403);
-      assert.equal((await call(admin, "PUT", "/api/admin/feed/config", { config: next }, "http://localhost:3000")).status, 403);
-      const invalid = await json(await call(admin, "PUT", "/api/admin/feed/config", { config: { ...next, epsilon: 2 } }, "http://localhost:3200"), 400);
-      assert.equal(invalid.error, "invalid_feed_config");
-      const saved = await json(await call(admin, "PUT", "/api/admin/feed/config", { config: next, note: "less exploration" }, "http://localhost:3200"));
-      assert.equal(saved.config.epsilon, 0.05);
-      const { rows: [audit] } = await query("SELECT action, detail, actor_id FROM moderation_activity WHERE action = 'updateFeedConfig'");
-      assert.deepEqual(audit, { action: "updateFeedConfig", detail: "less exploration", actor_id: admin.id });
-      const reread = await json(await call(moderator, "GET", "/api/admin/feed/config", undefined, "http://localhost:3200"));
-      assert.equal(reread.config.epsilon, 0.05);
-      assert.equal(reread.id, saved.id);
+      assert.equal(current.config.epsilon, 0);
+      assert.deepEqual(Object.keys(current.defaults).sort(), Object.keys(current.config).sort());
+      assert.equal((await call(admin, "PUT", "/api/admin/feed/config", { config: current.config }, "http://localhost:3200")).status, 404);
     });
 
     await t.test("reset and turning personalization off delete stored requests", async () => {

@@ -111,7 +111,3 @@ export async function loadConfig(): Promise<{ id: string | null; config: FeedCon
   cached = { id: row?.id ?? null, config: row ? mergeConfig(row.values) : defaultConfig, at: Date.now() };
   return cached;
 }
-
-export function clearConfigCache() {
-  cached = null;
-}
