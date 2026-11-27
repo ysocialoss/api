@@ -1,3 +1,4 @@
+import { backfillFeedEvents } from "./ranking/backfill.ts";
 import { Router } from "express";
 import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -38,12 +39,14 @@ router.patch("/preferences", async (req, res) => {
   const user = await requireUser(req);
   const input = preferencesSchema.safeParse(req.body);
   if (!input.success) throw new AuthError(400, "invalid_feed_preferences");
+  const alreadyOn = user.feedPersonalize && user.feedChoiceAt !== null;
   const saved = await db.transaction(async (tx) => {
     const [row] = await tx
       .update(users)
       .set({ feedPersonalize: input.data.personalize, feedChoiceAt: sql`coalesce(${users.feedChoiceAt}, now())`, updatedAt: sql`now()` })
       .where(eq(users.id, user.id))
       .returning({ personalize: users.feedPersonalize });
+    if (input.data.personalize && !alreadyOn) await backfillFeedEvents(tx, user.id);
     const cleared = input.data.personalize ? null : await tx.delete(feedEvents).where(eq(feedEvents.userId, user.id));
     return { ...row, chosen: true, cleared: cleared?.rowCount ?? 0 };
   });

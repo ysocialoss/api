@@ -39,33 +39,4 @@ CREATE INDEX "feed_events_post_idx" ON "feed_events" USING btree ("post_id","typ
 CREATE INDEX "feed_events_author_idx" ON "feed_events" USING btree ("author_id") WHERE "feed_events"."author_id" is not null;--> statement-breakpoint
 CREATE INDEX "feed_events_created_idx" ON "feed_events" USING brin ("created_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "feed_events_session_seq_idx" ON "feed_events" USING btree ("session_id","seq") WHERE "feed_events"."session_id" is not null;--> statement-breakpoint
-CREATE INDEX "posts_author_idx" ON "posts" USING btree ("author_id","created_at" DESC NULLS LAST,"id" DESC NULLS LAST);--> statement-breakpoint
-INSERT INTO "feed_events" ("user_id", "type", "post_id", "author_id", "origin", "created_at")
-SELECT l."user_id", 'like', l."post_id", p."author_id", 'backfill', l."created_at"
-FROM "post_likes" l JOIN "posts" p ON p."id" = l."post_id"
-WHERE l."user_id" <> p."author_id"
-	AND NOT EXISTS (SELECT 1 FROM "feed_events" WHERE "origin" = 'backfill' AND "type" = 'like');--> statement-breakpoint
-INSERT INTO "feed_events" ("user_id", "type", "post_id", "author_id", "origin", "created_at")
-SELECT r."user_id", 'repost', r."post_id", p."author_id", 'backfill', r."created_at"
-FROM "post_reposts" r JOIN "posts" p ON p."id" = r."post_id"
-WHERE r."user_id" <> p."author_id"
-	AND NOT EXISTS (SELECT 1 FROM "feed_events" WHERE "origin" = 'backfill' AND "type" = 'repost');--> statement-breakpoint
-INSERT INTO "feed_events" ("user_id", "type", "post_id", "author_id", "origin", "created_at")
-SELECT s."user_id", 'save', s."post_id", p."author_id", 'backfill', s."created_at"
-FROM "post_saves" s JOIN "posts" p ON p."id" = s."post_id"
-WHERE s."user_id" <> p."author_id"
-	AND NOT EXISTS (SELECT 1 FROM "feed_events" WHERE "origin" = 'backfill' AND "type" = 'save');--> statement-breakpoint
-INSERT INTO "feed_events" ("user_id", "type", "post_id", "author_id", "origin", "created_at")
-SELECT r."author_id", 'reply', parent."id", parent."author_id", 'backfill', r."created_at"
-FROM "posts" r JOIN "posts" parent ON parent."id" = r."parent_id"
-WHERE r."author_id" <> parent."author_id"
-	AND NOT EXISTS (SELECT 1 FROM "feed_events" WHERE "origin" = 'backfill' AND "type" = 'reply');--> statement-breakpoint
-INSERT INTO "feed_events" ("user_id", "type", "post_id", "author_id", "origin", "created_at")
-SELECT q."author_id", 'quote', quoted."id", quoted."author_id", 'backfill', q."created_at"
-FROM "posts" q JOIN "posts" quoted ON quoted."id" = q."quoted_post_id"
-WHERE q."is_quote" AND q."author_id" <> quoted."author_id"
-	AND NOT EXISTS (SELECT 1 FROM "feed_events" WHERE "origin" = 'backfill' AND "type" = 'quote');--> statement-breakpoint
-INSERT INTO "feed_events" ("user_id", "type", "author_id", "origin", "created_at")
-SELECT f."follower_id", 'follow', f."following_id", 'backfill', f."created_at"
-FROM "user_follows" f
-WHERE NOT EXISTS (SELECT 1 FROM "feed_events" WHERE "origin" = 'backfill' AND "type" = 'follow');
+CREATE INDEX "posts_author_idx" ON "posts" USING btree ("author_id","created_at" DESC NULLS LAST,"id" DESC NULLS LAST);

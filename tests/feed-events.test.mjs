@@ -267,17 +267,17 @@ test("feed activity is logged, gated by personalization, and the following feed 
       assert.equal((await call(erin, "GET", "/api/feed/following?cursor=bad")).status, 400);
     });
 
-    await t.test("the migration backfill is idempotent and dates likes from notifications", async () => {
+    await t.test("likes are dated from notifications and past activity is only backfilled once personalization is turned on", async () => {
       const sql = await readFile(new URL("../drizzle/0074_feed_events.sql", import.meta.url), "utf8");
       const statements = sql.split("--> statement-breakpoint").map((part) => part.trim());
       const likeUpdate = statements.find((part) => part.startsWith('UPDATE "post_likes"'));
-      const backfill = statements.filter((part) => part.startsWith('INSERT INTO "feed_events"'));
-      assert.equal(backfill.length, 6);
+      assert.equal(statements.filter((part) => part.startsWith('INSERT INTO "feed_events"')).length, 0);
       await query("DELETE FROM feed_events");
       const ivy = await account("ivy");
+      const jack = await account("jack");
       const target = await post(alice, "old", { createdAt: "2026-01-01T00:00:00Z" });
       const plain = await post(alice, "older", { createdAt: "2025-06-01T00:00:00Z" });
-      await query("INSERT INTO post_likes (post_id, user_id) VALUES ($1, $2), ($3, $2)", [target, ivy.id, plain]);
+      await query("INSERT INTO post_likes (post_id, user_id) VALUES ($1, $2), ($3, $2), ($1, $4)", [target, ivy.id, plain, jack.id]);
       await query(
         "INSERT INTO notifications (recipient_id, actor_id, kind, post_id, subject, created_at) VALUES ($1, $2, 'like', $3, $4, '2026-02-01T00:00:00Z')",
         [alice.id, ivy.id, target, target]);
@@ -288,18 +288,19 @@ test("feed activity is logged, gated by personalization, and the following feed 
         [plain, "2025-06-01T00:00:00.000Z"],
         [target, "2026-02-01T00:00:00.000Z"],
       ]);
-      for (const statement of backfill) await query(statement);
-      const first = (await query("SELECT type, count(*)::int AS n FROM feed_events WHERE origin = 'backfill' GROUP BY type ORDER BY type")).rows;
-      for (const statement of backfill) await query(statement);
-      const second = (await query("SELECT type, count(*)::int AS n FROM feed_events WHERE origin = 'backfill' GROUP BY type ORDER BY type")).rows;
-      assert.deepEqual(second, first);
-      const types = new Set(first.map((row) => row.type));
-      for (const type of ["like", "reply", "quote", "follow"]) assert.ok(types.has(type), type);
-      const ivyLike = (await query(
-        "SELECT created_at FROM feed_events WHERE origin = 'backfill' AND user_id = $1 AND post_id = $2", [ivy.id, target])).rows;
-      assert.equal(ivyLike[0].created_at.toISOString(), "2026-02-01T00:00:00.000Z");
-      assert.equal((await query(
-        "SELECT 1 FROM feed_events WHERE origin = 'backfill' AND type = 'reply' AND user_id = author_id")).rowCount, 0);
+      await query("UPDATE users SET feed_choice_at = NULL WHERE id IN ($1, $2)", [ivy.id, jack.id]);
+      assert.equal((await query("SELECT 1 FROM feed_events WHERE origin = 'backfill'")).rowCount, 0);
+      assert.equal((await call(ivy, "PATCH", "/api/feed/preferences", { personalize: true })).status, 200);
+      const ivyEvents = (await query("SELECT type, post_id, created_at FROM feed_events WHERE origin = 'backfill' AND user_id = $1 ORDER BY created_at", [ivy.id])).rows;
+      assert.deepEqual(ivyEvents.map((row) => row.type), ["like", "like"]);
+      assert.equal(ivyEvents.find((row) => row.post_id === target).created_at.toISOString(), "2026-02-01T00:00:00.000Z");
+      assert.equal((await query("SELECT 1 FROM feed_events WHERE user_id = $1", [jack.id])).rowCount, 0);
+      assert.equal((await call(ivy, "PATCH", "/api/feed/preferences", { personalize: true })).status, 200);
+      assert.equal((await query("SELECT 1 FROM feed_events WHERE origin = 'backfill' AND user_id = $1", [ivy.id])).rowCount, 2);
+      assert.equal((await call(ivy, "PATCH", "/api/feed/preferences", { personalize: false })).status, 200);
+      assert.equal((await query("SELECT 1 FROM feed_events WHERE user_id = $1", [ivy.id])).rowCount, 0);
+      assert.equal((await call(ivy, "PATCH", "/api/feed/preferences", { personalize: true })).status, 200);
+      assert.equal((await query("SELECT 1 FROM feed_events WHERE origin = 'backfill' AND user_id = $1", [ivy.id])).rowCount, 2);
     });
 
     await t.test("deleting an account removes its feed activity and events about its posts", async () => {
