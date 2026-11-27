@@ -4,7 +4,7 @@ import { defaultConfig, headNames, loadConfig } from "./config.ts";
 import { featureIndex, featureNames, featureVersion, priorHeads } from "./model.ts";
 
 export const minUsers = 5;
-export const minViewers = 3;
+export const minViewers = minUsers;
 
 const num = (value: unknown) => (value === null || value === undefined ? 0 : Number(value));
 const rate = (part: unknown, whole: unknown) => (num(whole) > 0 ? num(part) / num(whole) : null);

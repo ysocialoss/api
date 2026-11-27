@@ -256,6 +256,7 @@ test("ranked feed: modes, paging, exclusions, shadow logging, fallback and admin
         assert.equal(dashboard[key].error, undefined, key);
       }
       assert.equal(dashboard.days, 7);
+      assert.deepEqual(dashboard.thresholds, { minUsers: 5, minViewers: 5 });
       assert.equal(dashboard.adoption.optedOut, 1);
       assert.ok(dashboard.adoption.optedIn >= 9);
       assert.ok(dashboard.pipeline.requestsByDay.length === 7);
