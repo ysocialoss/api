@@ -93,7 +93,7 @@ test("search finds users, topics and posts while hiding banned and unapproved ac
     assert.deepEqual(preview.users.map((entry) => entry.handle), ["alicia", "alice", "carol"]);
     assert.equal(preview.moreUsers, true);
     assert.equal(preview.users[0].followerCount, 2);
-    assert.deepEqual(Object.keys(preview.users[0]).sort(), ["avatarUrl", "bio", "displayName", "followerCount", "handle", "id", "paint"]);
+    assert.deepEqual(Object.keys(preview.users[0]).sort(), ["avatarUrl", "bio", "displayName", "eveStar", "followerCount", "handle", "id", "paint"]);
 
     const exact = await get(`/api/search?q=${q("@Alice")}&type=users`);
     assert.deepEqual(
