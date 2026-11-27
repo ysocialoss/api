@@ -50,12 +50,17 @@ async function readCursor(value: unknown) {
   }
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number) {
+function withTimeout<T>(run: (signal: AbortSignal) => Promise<T>, ms: number) {
+  const controller = new AbortController();
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("feed_timeout")), ms);
+    timer = setTimeout(() => {
+      const error = new Error("feed_timeout");
+      controller.abort(error);
+      reject(error);
+    }, ms);
   });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  return Promise.race([run(controller.signal), timeout]).finally(() => clearTimeout(timer));
 }
 
 function scoreAll(
@@ -83,7 +88,7 @@ function scoreAll(
   return scored;
 }
 
-async function rank(options: { viewerId: string | null; mode: FeedMode; chainId: string; continuation: boolean }) {
+async function rank(options: { viewerId: string | null; mode: FeedMode; chainId: string; continuation: boolean; signal?: AbortSignal }) {
   const started = performance.now();
   const timings: Record<string, number> = {};
   let mark = started;
@@ -110,17 +115,20 @@ async function rank(options: { viewerId: string | null; mode: FeedMode; chainId:
     },
   });
   lap("inventory");
+  options.signal?.throwIfAborted();
   const postIds = candidates.map((candidate) => candidate.postId);
   const [features, topics] = await Promise.all([
     computeFeatures(options.viewerId, postIds),
     controls ? loadPostTopics(postIds) : Promise.resolve(new Map<string, string[]>()),
   ]);
   lap("features");
+  options.signal?.throwIfAborted();
   const scored = scoreAll(candidates, features, model, config, controls, topics);
   lap("score");
   const requestId = randomUUID();
   const placed = rerank(scored, config, requestId, config.storedCandidates);
   lap("rerank");
+  options.signal?.throwIfAborted();
   await db.transaction(async (tx) => {
     await tx.insert(feedRequests).values({
       id: requestId,
@@ -216,7 +224,7 @@ async function hydrate(
   };
 }
 
-async function serve(requestId: string, offset: number, pageSize: number, mode: FeedMode) {
+async function serve(requestId: string, offset: number, pageSize: number, mode: FeedMode, signal: AbortSignal) {
   const rows = await db.select({
     postId: feedCandidates.postId,
     position: feedCandidates.position,
@@ -226,6 +234,7 @@ async function serve(requestId: string, offset: number, pageSize: number, mode: 
     .where(and(eq(feedCandidates.requestId, requestId), gte(feedCandidates.position, offset)))
     .orderBy(asc(feedCandidates.position))
     .limit(pageSize);
+  signal.throwIfAborted();
   if (mode === "personal" && rows.length)
     await db.update(feedCandidates)
       .set({ servedAt: sql`now()`, page: Math.floor(offset / pageSize) })
@@ -247,7 +256,7 @@ async function storedCount(requestId: string) {
   return row?.count ?? 0;
 }
 
-async function rankedPage(viewerId: string | null, mode: FeedMode, rawCursor: unknown): Promise<RankedPage> {
+async function rankedPage(viewerId: string | null, mode: FeedMode, rawCursor: unknown, signal: AbortSignal): Promise<RankedPage> {
   const cursor = await readCursor(rawCursor);
   const { config } = await loadConfig();
   const pageSize = config.pageSize;
@@ -270,11 +279,11 @@ async function rankedPage(viewerId: string | null, mode: FeedMode, rawCursor: un
       offset = cursor.o;
       candidateCount = request.candidateCount;
     } else if (mode === "personal" && (stale || request.candidateCount > stored)) {
-      fresh = await rank({ viewerId, mode, chainId: request.chainId, continuation: true });
+      fresh = await rank({ viewerId, mode, chainId: request.chainId, continuation: true, signal });
       requestId = fresh.requestId;
       candidateCount = fresh.candidateCount;
     } else if (mode === "public" && stale) {
-      fresh = await rank({ viewerId: null, mode, chainId: randomUUID(), continuation: false });
+      fresh = await rank({ viewerId: null, mode, chainId: randomUUID(), continuation: false, signal });
       requestId = fresh.requestId;
       candidateCount = fresh.candidateCount;
     } else {
@@ -289,17 +298,17 @@ async function rankedPage(viewerId: string | null, mode: FeedMode, rawCursor: un
       candidateCount = cachedRequest.candidateCount;
     } else {
       await bumpCounter("public_cache_miss");
-      fresh = await rank({ viewerId: null, mode, chainId: randomUUID(), continuation: false });
+      fresh = await rank({ viewerId: null, mode, chainId: randomUUID(), continuation: false, signal });
       requestId = fresh.requestId;
       candidateCount = fresh.candidateCount;
     }
   } else {
-    fresh = await rank({ viewerId, mode, chainId: randomUUID(), continuation: false });
+    fresh = await rank({ viewerId, mode, chainId: randomUUID(), continuation: false, signal });
     requestId = fresh.requestId;
     candidateCount = fresh.candidateCount;
   }
   const hydrateStarted = performance.now();
-  const items = await serve(requestId, offset, pageSize, mode);
+  const items = await serve(requestId, offset, pageSize, mode, signal);
   const page = await hydrate(items, requestId, viewerId, mode);
   if (fresh) await finishTimings(requestId, fresh.started, fresh.timings, Math.round(performance.now() - hydrateStarted));
   const stored = fresh ? fresh.stored : await storedCount(requestId);
@@ -339,7 +348,7 @@ export async function forYouPage(viewer: { id: string | null; personal: boolean 
   const mode: FeedMode = viewer.personal && viewer.id ? "personal" : "public";
   const { config } = await loadConfig();
   try {
-    return await withTimeout(rankedPage(viewer.id, mode, rawCursor), config.timeoutMs);
+    return await withTimeout((signal) => rankedPage(viewer.id, mode, rawCursor, signal), config.timeoutMs);
   } catch (error) {
     if (error instanceof AuthError) throw error;
     const timedOut = error instanceof Error && error.message === "feed_timeout";

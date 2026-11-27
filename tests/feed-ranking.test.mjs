@@ -223,6 +223,31 @@ test("ranked feed: modes, paging, exclusions, shadow logging, fallback and admin
       assert.ok(errors.n >= 1);
     });
 
+    await t.test("a timed out ranking serves the fallback and marks nothing as served", async () => {
+      const startedAt = new Date();
+      const lock = await database.pool.connect();
+      try {
+        await lock.query("BEGIN");
+        await lock.query("LOCK TABLE feed_candidates IN SHARE MODE");
+        const page = await json(await forYou(viewer));
+        assert.equal(page.fallback, true);
+        await lock.query("COMMIT");
+      } finally {
+        lock.release();
+      }
+      let late;
+      for (let attempt = 0; attempt < 50 && !late; attempt++) {
+        late = (await query("SELECT id FROM feed_requests WHERE user_id = $1 AND surface = 'for_you' AND created_at >= $2", [viewer.id, startedAt])).rows[0];
+        if (!late) await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.ok(late);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const { rows: [served] } = await query("SELECT count(*)::int AS n FROM feed_candidates WHERE request_id = $1 AND served_at IS NOT NULL", [late.id]);
+      assert.equal(served.n, 0);
+      const { rows: [counter] } = await query("SELECT sum(value)::int AS n FROM feed_counters WHERE name = 'pipeline_fallback_chrono'");
+      assert.ok(counter.n >= 1);
+    });
+
     await t.test("admin feed stats and config", async () => {
       assert.equal((await call(viewer, "GET", "/api/admin/feed", undefined, "http://localhost:3200")).status, 403);
       const dashboard = await json(await call(moderator, "GET", "/api/admin/feed?days=7", undefined, "http://localhost:3200"));
