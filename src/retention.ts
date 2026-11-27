@@ -7,6 +7,11 @@ const dayMs = 24 * 60 * 60 * 1000;
 export const retentionRules = [
   { name: "feed_events_client", sql: "delete from feed_events where origin = 'client' and created_at < now() - interval '180 days'" },
   { name: "feed_events_server", sql: "delete from feed_events where origin <> 'client' and created_at < now() - interval '365 days'" },
+  { name: "feed_requests_personal", sql: "delete from feed_requests where mode = 'personal' and created_at < now() - interval '180 days'" },
+  { name: "feed_requests_public", sql: "delete from feed_requests where mode = 'public' and created_at < now() - interval '2 days'" },
+  { name: "feed_candidates_unserved", sql: `delete from feed_candidates c using feed_requests r
+    where r.id = c.request_id and c.served_at is null and r.created_at < now() - interval '14 days'` },
+  { name: "feed_counters", sql: "delete from feed_counters where day < (now() - interval '400 days')::date" },
   { name: "reports", sql: "delete from reports where status <> 'open' and resolved_at < now() - interval '6 months' and escalated_at is null" },
   { name: "reports_escalated", sql: "delete from reports where status <> 'open' and escalated_at < now() - interval '12 months'" },
   { name: "moderation_appeals", sql: "delete from moderation_appeals where status <> 'open' and resolved_at < now() - interval '12 months'" },

@@ -7,6 +7,7 @@ import { env } from "./config.ts";
 import { db, pool } from "./db/index.ts";
 import { isDraining, readHealthChecks } from "./health.ts";
 import { liveStreamCount } from "./live-events.ts";
+import { feedHealth } from "./ranking/stats.ts";
 
 const startedAt = new Date(Date.now() - process.uptime() * 1000);
 const eventLoop = monitorEventLoopDelay({ resolution: 20 });
@@ -178,8 +179,7 @@ async function feedData() {
     select
       (select count(*) from feed_events) as events,
       (select count(*) from feed_events where created_at >= now() - interval '1 day') as events_24h,
-      (select count(distinct user_id) from feed_events where origin = 'client' and created_at >= now() - interval '7 days') as tracked_7d,
-      (select count(*) from users where not feed_personalize) as opted_out`);
+      (select count(distinct user_id) from feed_events where origin = 'client' and created_at >= now() - interval '7 days') as tracked_7d`);
   const byType = await rows<{ type: string; count: string }>(sql`
     select type, count(*) as count from feed_events
     where created_at >= now() - interval '1 day'
@@ -189,13 +189,15 @@ async function feedData() {
     from generate_series(date_trunc('day', now()) - interval '13 days', date_trunc('day', now()), interval '1 day') d
     left join feed_events e on e.origin <> 'backfill' and e.created_at >= d and e.created_at < d + interval '1 day'
     group by d order by d`);
+  const health = await feedHealth();
   return {
     events: num(totals.events),
     events24h: num(totals.events_24h),
     trackedUsers7d: num(totals.tracked_7d),
-    personalizationOff: num(totals.opted_out),
+    personalizationOff: health.optedOut,
     byType24h: byType.map((row) => ({ type: row.type, count: num(row.count) })),
     eventsByDay: byDay.map((row) => ({ day: row.day, count: num(row.count) })),
+    ...health,
   };
 }
 

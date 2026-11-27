@@ -9,7 +9,8 @@ import {
   repostVisibleSql,
   visiblePost,
 } from "./post-data.ts";
-import { homeFeed } from "./feed-entries.ts";
+import { forYouResponse } from "./feed.ts";
+import { loadAncestors } from "./post-ancestors.ts";
 import { notBlockedSql, requireNotBlocked } from "./blocks.ts";
 import { Router, type Request } from "express";
 import { alias } from "drizzle-orm/pg-core";
@@ -283,40 +284,6 @@ router.use((_req, res, next) => {
   res.set("Cache-Control", "no-store");
   next();
 });
-// For each reply in `page`, the posts above it, root first.
-async function loadAncestors(
-  page: { id: string; parentId: string | null }[],
-  viewerId: string | null,
-) {
-  const replyIds = page.filter((row) => row.parentId).map((row) => row.id);
-  const result = new Map<string, ReturnType<typeof serializePost>[]>();
-  if (!replyIds.length) return result;
-  const chains = await db.execute<{ origin: string; id: string }>(sql`
-    with recursive chain as (
-      select id as origin, parent_id as id, 1 as depth
-      from posts where id in (${sql.join(
-        replyIds.map((id) => sql`${id}::uuid`),
-        sql`, `,
-      )}) and parent_id is not null
-      union all
-      select c.origin, p.parent_id, c.depth + 1
-      from chain c join posts p on p.id = c.id
-      where p.parent_id is not null and c.depth < 100
-    )
-    select origin, id from chain order by origin, depth desc
-  `);
-  const ancestorRows = await db
-    .select(postSelection(viewerId))
-    .from(posts)
-    .innerJoin(users, eq(users.id, posts.authorId))
-    .where(and(isNull(users.bannedAt), isNull(posts.hiddenAt), inArray(posts.id, [...new Set(chains.rows.map((row) => row.id))])));
-  const byId = new Map(ancestorRows.map((row) => [row.id, serializePost(row)]));
-  for (const { origin, id } of chains.rows) {
-    const found = byId.get(id);
-    if (found) result.set(origin, [...(result.get(origin) ?? []), found]);
-  }
-  return result;
-}
 const listPosts: import("express").RequestHandler = async (req, res) => {
   const parentId =
     typeof req.params.id === "string" ? req.params.id : undefined;
@@ -334,7 +301,6 @@ const listPosts: import("express").RequestHandler = async (req, res) => {
   const textSearch = search?.usable ? search : undefined;
   const searching = textSearch !== undefined || filters?.active === true;
   const oldestFirst = searching && filters?.sort === "oldest";
-  const cursor = readCursor(req.query.cursor);
   if (search && !search.usable && !searching) {
     res.json({
       repostedBy: {},
@@ -345,10 +311,10 @@ const listPosts: import("express").RequestHandler = async (req, res) => {
     return;
   }
   if (!parentId && !topic && !searching) {
-    const feed = await homeFeed(viewerId, cursor && { createdAt: cursor.createdAt, id: cursor.id }, 20);
-    res.json({ ...feed, serverNow: new Date().toISOString() });
+    res.json(await forYouResponse(req));
     return;
   }
+  const cursor = readCursor(req.query.cursor);
   const rows = await db
     .select(postSelection(viewerId))
     .from(posts)

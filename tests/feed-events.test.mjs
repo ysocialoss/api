@@ -47,6 +47,14 @@ test("feed activity is logged, gated by personalization, and the following feed 
     const post = async (author, content = "hello", extra = {}) => (await query(
       "INSERT INTO posts (author_id, content, parent_id, created_at) VALUES ($1, $2, $3, coalesce($4, now())) RETURNING id",
       [author.id, content, extra.parentId ?? null, extra.createdAt ?? null])).rows[0].id;
+    const ownRequest = async (userId) => {
+      await query("INSERT INTO feed_feature_sets (version, names) VALUES (1, '{}') ON CONFLICT DO NOTHING");
+      const id = randomUUID();
+      await query(
+        `INSERT INTO feed_requests (id, user_id, mode, surface, chain_id, feature_version, source_counts, candidate_count, latency_ms, timings)
+         VALUES ($1, $2, 'personal', 'for_you', $1, 1, '{}', 0, 0, '{}')`, [id, userId]);
+      return id;
+    };
     const events = async (userId, extraWhere = "") => (await query(
       `SELECT * FROM feed_events WHERE user_id = $1 AND origin <> 'backfill' ${extraWhere} ORDER BY id`, [userId])).rows;
 
@@ -74,10 +82,11 @@ test("feed activity is logged, gated by personalization, and the following feed 
     await t.test("client batches are validated, deduplicated and attributed on the server", async () => {
       const bobPost = await post(bob, "from bob");
       const ownPost = await post(alice, "mine");
-      const requestId = randomUUID();
+      const requestId = await ownRequest(alice.id);
+      const foreignRequest = await ownRequest(bob.id);
       const response = await call(alice, "POST", "/api/feed/events", batch([
         { type: "impression", postId: bobPost, surface: "latest", position: 0, requestId, seq: 1, value: 80, at: at() },
-        { type: "dwell", postId: bobPost, surface: "latest", position: 0, seq: 2, value: 4200, at: at() },
+        { type: "dwell", postId: bobPost, surface: "latest", position: 0, requestId: foreignRequest, seq: 2, value: 4200, at: at() },
         { type: "link_open", postId: bobPost, surface: "latest", seq: 3, detail: "example.com", at: at() },
         { type: "topic_open", surface: "latest", seq: 4, detail: "Music", at: at() },
         { type: "impression", postId: randomUUID(), surface: "latest", seq: 5, at: at() },
@@ -88,6 +97,7 @@ test("feed activity is logged, gated by personalization, and the following feed 
       assert.deepEqual(logged.map((row) => row.type), ["impression", "dwell", "link_open", "topic_open"]);
       assert.equal(logged[0].author_id, bob.id);
       assert.equal(logged[0].request_id, requestId);
+      assert.equal(logged[1].request_id, null);
       assert.equal(logged[0].position, 0);
       assert.equal(logged[0].origin, "client");
       assert.equal(logged[0].client, "desktop");
@@ -130,7 +140,7 @@ test("feed activity is logged, gated by personalization, and the following feed 
 
     await t.test("server actions log one event per real change, with the feed context header", async () => {
       const target = await post(carol, "like me");
-      const requestId = randomUUID();
+      const requestId = await ownRequest(dave.id);
       const context = { "X-Feed-Context": `following 3 ${requestId}` };
       assert.equal((await call(dave, "PUT", `/api/posts/${target}/like`, undefined, context)).status, 200);
       assert.equal((await call(dave, "PUT", `/api/posts/${target}/like`)).status, 200);

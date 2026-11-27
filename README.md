@@ -100,6 +100,8 @@ When you add an API error string, add it there too, in the matching range.
 | YS-4009 | `push_subscription_not_found` | The push subscription does not exist. |
 | YS-4010 | `invalid_feed_events` | A batch of feed activity events failed validation. |
 | YS-4011 | `invalid_feed_preferences` | The feed preferences update is not valid. |
+| YS-4012 | `feed_personalization_required` | The ranked feed needs feed personalization, which this account turned off. |
+| YS-4013 | `invalid_feed_config` | The feed ranking configuration failed validation. |
 
 ## 5xxx: Media
 

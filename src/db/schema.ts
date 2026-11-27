@@ -11,7 +11,9 @@ import {
   check,
   customType,
   boolean,
+  date,
   doublePrecision,
+  real,
   pgEnum,
   integer,
   jsonb,
@@ -880,6 +882,98 @@ export const feedEvents = pgTable("feed_events", {
   check("feed_events_origin_check", sql`${table.origin} in ('client', 'server', 'backfill')`),
   check("feed_events_detail_check", sql`${table.detail} is null or char_length(${table.detail}) <= 253`),
   check("feed_events_session_check", sql`(${table.sessionId} is null) = (${table.seq} is null)`),
+]);
+
+export const feedModes = ["personal", "public"] as const;
+export const feedModelStatuses = ["queued", "training", "candidate", "active", "retired", "failed"] as const;
+
+export const feedFeatureSets = pgTable("feed_feature_sets", {
+  version: integer().primaryKey(),
+  names: text().array().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+});
+
+export const feedConfig = pgTable("feed_config", {
+  id: uuid().defaultRandom().primaryKey(),
+  values: jsonb().$type<Record<string, unknown>>().notNull(),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  index("feed_config_created_idx").on(table.createdAt.desc()),
+  index("feed_config_created_by_idx").on(table.createdBy),
+]);
+
+export const feedModels = pgTable("feed_models", {
+  id: uuid().defaultRandom().primaryKey(),
+  status: text().$type<(typeof feedModelStatuses)[number]>().notNull(),
+  featureVersion: integer("feature_version").notNull().references(() => feedFeatureSets.version),
+  heads: jsonb().$type<Record<string, unknown>>(),
+  metrics: jsonb().$type<Record<string, unknown>>(),
+  trainedFrom: timestamp("trained_from", { withTimezone: true, precision: 3 }),
+  trainedTo: timestamp("trained_to", { withTimezone: true, precision: 3 }),
+  error: text(),
+  requestedBy: uuid("requested_by").references(() => users.id, { onDelete: "set null" }),
+  activatedAt: timestamp("activated_at", { withTimezone: true, precision: 3 }),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("feed_models_active_idx").on(table.status).where(sql`${table.status} = 'active'`),
+  index("feed_models_requested_by_idx").on(table.requestedBy),
+  check("feed_models_status_check", sql`${table.status} in (${sqlList(feedModelStatuses)})`),
+]);
+
+export const feedRequests = pgTable("feed_requests", {
+  id: uuid().primaryKey(),
+  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
+  mode: text().$type<(typeof feedModes)[number]>().notNull(),
+  surface: text().$type<(typeof feedSurfaces)[number]>().notNull(),
+  chainId: uuid("chain_id").notNull(),
+  continuation: boolean().notNull().default(false),
+  modelId: uuid("model_id").references(() => feedModels.id, { onDelete: "set null" }),
+  configId: uuid("config_id").references(() => feedConfig.id, { onDelete: "set null" }),
+  featureVersion: integer("feature_version").notNull().references(() => feedFeatureSets.version),
+  sourceCounts: jsonb("source_counts").$type<Record<string, number>>().notNull(),
+  candidateCount: integer("candidate_count").notNull(),
+  latencyMs: integer("latency_ms").notNull(),
+  timings: jsonb().$type<Record<string, number>>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  index("feed_requests_user_idx").on(table.userId, table.createdAt.desc()),
+  index("feed_requests_mode_idx").on(table.mode, table.surface, table.createdAt.desc()),
+  index("feed_requests_chain_idx").on(table.chainId),
+  index("feed_requests_created_idx").using("brin", table.createdAt),
+  index("feed_requests_model_idx").on(table.modelId),
+  index("feed_requests_config_idx").on(table.configId),
+  check("feed_requests_mode_check", sql`${table.mode} in (${sqlList(feedModes)})`),
+  check("feed_requests_surface_check", sql`${table.surface} in ('for_you', 'following')`),
+  check("feed_requests_owner_check", sql`(${table.mode} = 'public') = (${table.userId} is null)`),
+]);
+
+export const feedCandidates = pgTable("feed_candidates", {
+  requestId: uuid("request_id").notNull().references(() => feedRequests.id, { onDelete: "cascade" }),
+  postId: uuid("post_id").notNull().references(() => posts.id, { onDelete: "cascade" }),
+  position: smallint().notNull(),
+  sources: text().array().notNull(),
+  features: real().array().notNull(),
+  predictions: real().array().notNull(),
+  score: real().notNull(),
+  reason: text().notNull(),
+  explore: boolean().notNull().default(false),
+  propensity: real().notNull().default(1),
+  servedAt: timestamp("served_at", { withTimezone: true, precision: 3 }),
+  page: smallint(),
+}, (table) => [
+  primaryKey({ columns: [table.requestId, table.postId] }),
+  uniqueIndex("feed_candidates_position_idx").on(table.requestId, table.position),
+  index("feed_candidates_post_idx").on(table.postId),
+]);
+
+export const feedCounters = pgTable("feed_counters", {
+  day: date().notNull(),
+  name: text().notNull(),
+  value: bigint({ mode: "number" }).notNull().default(0),
+}, (table) => [
+  primaryKey({ columns: [table.day, table.name] }),
+  check("feed_counters_name_check", sql`${table.name} ~ '^[a-z_]{1,48}$'`),
 ]);
 
 export const deletedAccounts = pgTable("deleted_accounts", {
