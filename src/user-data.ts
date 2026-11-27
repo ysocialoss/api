@@ -29,12 +29,23 @@ export function paintJson(paintId: SQL) {
   return sql<UserPaint | null>`(select jsonb_build_object('id', ${column(paints.id.name)}, 'name', ${column(paints.name.name)}, 'definition', ${column(paints.definition.name)}) from ${paints} p where ${column(paints.id.name)} = ${paintId})`;
 }
 
+export type EveStar = { year: number; doors: number };
+
+export function eveStarJson(userId: SQL) {
+  return sql<EveStar | null>`(select json_build_object('year', r.year, 'doors', r.doors_opened)
+    from ${adventRewards} r
+    where r.user_id = ${userId} and r.day = 24 and r.enabled and r.doors_opened is not null
+      and now() < make_timestamptz(r.year + 1, 2, 1, 0, 0, 0, 'UTC')
+    order by r.year desc limit 1)`;
+}
+
 export const userSelection = {
   id: users.id,
   handle: users.handle,
   displayName: users.displayName,
   avatarUrl: avatarUrlSelection(users),
   paint: paintJson(sql`${users}.${sql.identifier(users.paintId.name)}`),
+  eveStar: eveStarJson(sql`${users}.${sql.identifier(users.id.name)}`),
 };
 
 export const banDetailsSelection = {

@@ -554,6 +554,13 @@
       "when": 1795779308637,
       "tag": "0078_advent_snow_on_door_one",
       "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1795780110128,
+      "tag": "0079_advent_eve_star",
+      "breakpoints": true
     }
   ]
 }

@@ -90,6 +90,7 @@ test("post activity lists all participants, validates queries, and reflects remo
           displayName: people[0].display_name,
           avatarUrl: "/api/avatars/test.webp",
           paint: null,
+          eveStar: null,
         },
       );
       assert.deepEqual(await get(otherPost.id, `type=${type}`), {

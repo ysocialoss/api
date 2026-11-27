@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
 import { requireApprovedUser, requireUser } from "./auth/request.ts";
@@ -13,7 +13,8 @@ router.use((_req, res, next) => {
 });
 
 const HOUR = 3_600_000;
-export const rewardDays = [1, 7, 14];
+export const EVE_DAY = 24;
+export const rewardDays = [1, 7, 14, EVE_DAY];
 
 export function doorIsOpenable(year: number, day: number, at: Date) {
   const start = Date.UTC(year, 11, day) - 14 * HOUR;
@@ -33,7 +34,12 @@ const openedDays = async (userId: string, year: number) =>
 
 const rewardsOf = (userId: string) =>
   db
-    .select({ year: adventRewards.year, day: adventRewards.day, enabled: adventRewards.enabled })
+    .select({
+      year: adventRewards.year,
+      day: adventRewards.day,
+      enabled: adventRewards.enabled,
+      doorsOpened: adventRewards.doorsOpened,
+    })
     .from(adventRewards)
     .where(eq(adventRewards.userId, userId))
     .orderBy(asc(adventRewards.year), asc(adventRewards.day));
@@ -78,7 +84,16 @@ router.post("/:year/:day", async (req, res) => {
       .insert(adventDoors)
       .values({ userId: user.id, year: year.data, day: day.data })
       .onConflictDoNothing();
-    if (rewardDays.includes(day.data)) {
+    if (day.data === EVE_DAY) {
+      const [{ count }] = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(adventDoors)
+        .where(and(eq(adventDoors.userId, user.id), eq(adventDoors.year, year.data), lt(adventDoors.day, EVE_DAY)));
+      await tx
+        .insert(adventRewards)
+        .values({ userId: user.id, year: year.data, day: EVE_DAY, enabled: true, doorsOpened: count })
+        .onConflictDoNothing();
+    } else if (rewardDays.includes(day.data)) {
       await tx
         .insert(adventRewards)
         .values({ userId: user.id, year: year.data, day: day.data })

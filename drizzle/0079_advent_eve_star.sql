@@ -1,0 +1,2 @@
+ALTER TABLE "advent_rewards" ADD COLUMN "doors_opened" integer;--> statement-breakpoint
+ALTER TABLE "advent_rewards" ADD CONSTRAINT "advent_rewards_doors_opened_check" CHECK ("advent_rewards"."doors_opened" between 0 and 23);
