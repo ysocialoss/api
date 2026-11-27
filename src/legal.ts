@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { env } from "./config.ts";
 import { AuthError } from "./auth/provider.ts";
+import { hashMatcher } from "./safety/hash-match.ts";
 
 export const termsVersion = "2026-12-01";
 
@@ -17,8 +18,8 @@ export const termsClauses = [
   { id: "5.9", title: "Impersonation" },
   { id: "5.10", title: "Privacy of others" },
   { id: "5.11", title: "Intellectual property" },
-  { id: "6.2", title: "Ban evasion and misuse of the service" },
   { id: "5.12", title: "AI-generated content" },
+  { id: "6.2", title: "Ban evasion and misuse of the service" },
 ] as const;
 
 export const termsClauseIds = termsClauses.map((clause) => clause.id) as [string, ...string[]];
@@ -33,8 +34,8 @@ export const reasonClause: Record<string, string> = {
   spam: "5.7",
   misinformation: "5.8",
   impersonation: "5.9",
-};
   ai_generated: "5.12",
+};
 
 export const legalCategories = [
   "child_sexual_abuse",
@@ -67,7 +68,7 @@ router.get("/operator", (_req, res) => {
     name: env.OPERATOR_NAME,
     address: env.OPERATOR_ADDRESS.split("|").map((line) => line.trim()).filter(Boolean),
     email: env.OPERATOR_EMAIL,
-    phone: env.OPERATOR_PHONE ?? null,
+    hashMatching: hashMatcher() !== null,
     contacts: contactAddresses(),
   });
 });

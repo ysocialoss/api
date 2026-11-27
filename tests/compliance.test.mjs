@@ -27,8 +27,15 @@ test("legal, data rights, moderation transparency and safety", async (t) => {
       ADMIN_ORIGIN: "http://localhost:3200",
       SESSION_ENCRYPTION_KEY: "a".repeat(64),
       NSFW_CHECK_URL: "http://127.0.0.1:9",
+      OPERATOR_NAME: "",
+      OPERATOR_ADDRESS: "",
+      OPERATOR_EMAIL: "",
+      PRIVACY_EMAIL: "",
+      ABUSE_EMAIL: "",
+      PHOTODNA_URL: "",
+      PHOTODNA_KEY: "",
+      TRUST_PROXY: "",
     });
-    delete process.env.OPERATOR_NAME;
     database = await import("../src/db/index.ts");
     const { app } = await import("../src/app.ts");
     const { hash } = await import("../src/auth/secrets.ts");
