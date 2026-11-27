@@ -170,3 +170,10 @@ test("explanations survive malformed trained heads", async () => {
   const features = vector({ affinity: 1 });
   assert.ok(factorStrengths(features, predict(priorModel, features), heads, defaultConfig).length > 0);
 });
+
+test("config rows that contradict themselves fall back to the defaults", () => {
+  assert.deepEqual(mergeConfig({ windowHours: 200, wideWindowHours: 100 }), defaultConfig);
+  assert.deepEqual(mergeConfig({ minCandidates: 500, maxCandidates: 100 }), defaultConfig);
+  assert.deepEqual(mergeConfig({ pageSize: 50, storedCandidates: 20 }), defaultConfig);
+  assert.equal(mergeConfig({ pageSize: 20, storedCandidates: 20 }).storedCandidates, 20);
+});

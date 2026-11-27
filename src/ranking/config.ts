@@ -53,7 +53,10 @@ export const configSchema = z.strictObject({
   publicCacheSeconds: z.number().int().min(0).max(3600),
   timeoutMs: z.number().int().min(200).max(10_000),
   controls: controlsSchema,
-});
+}).refine((config) =>
+  config.wideWindowHours >= config.windowHours &&
+  config.minCandidates <= config.maxCandidates &&
+  config.pageSize <= config.storedCandidates);
 export type FeedConfig = z.infer<typeof configSchema>;
 
 export const defaultConfig: FeedConfig = {
