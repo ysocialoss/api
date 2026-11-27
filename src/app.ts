@@ -31,6 +31,7 @@ import admin from "./admin.ts";
 import reports from "./reports.ts";
 import feed from "./feed.ts";
 import legal from "./legal.ts";
+import contact from "./contact.ts";
 import dataExport from "./data-export.ts";
 import gifMedia from "./gif-media.ts";
 import { userModeration } from "./moderation.ts";
@@ -72,6 +73,7 @@ app.use("/api/blocks", blocks);
 app.use("/api/posts", posts);
 app.use("/api/feed", feed);
 app.use("/api/legal", legal);
+app.use("/api/contact", contact);
 app.use("/api/me", dataExport);
 app.use("/api/gifs", gifMedia);
 app.use("/api/moderation", userModeration);
@@ -222,6 +224,7 @@ if (import.meta.main) {
       to_regclass('public.profile_pins') IS NOT NULL AND
       to_regclass('public.github_connections') IS NOT NULL AND
       to_regclass('public.github_link_attempts') IS NOT NULL AND
+      to_regclass('public.contact_messages') IS NOT NULL AND
       to_regclass('public.advent_doors') IS NOT NULL AND
       to_regclass('public.advent_rewards') IS NOT NULL AND
       to_regclass('public.github_contribution_jobs') IS NOT NULL AND

@@ -96,6 +96,35 @@ test("legal, data rights, moderation transparency and safety", async (t) => {
       assert.equal((await (await call(alice, "GET", "/auth/me")).json()).termsCurrent, true);
     });
 
+    await t.test("the contact form stores messages for admins only and resists abuse", async () => {
+      const message = { name: "Visitor", email: "visitor@example.test", message: "Hello, I have a question about my account." };
+      assert.equal((await call(null, "POST", "/api/contact", message, "http://evil.test")).status, 403);
+      assert.equal((await call(null, "POST", "/api/contact", { ...message, message: "short" })).status, 400);
+      assert.equal((await call(null, "POST", "/api/contact", { ...message, email: "not-an-email" })).status, 400);
+      assert.equal((await call(null, "POST", "/api/contact", { ...message, phone: "123" })).status, 400);
+      assert.equal((await call(null, "POST", "/api/contact", { ...message, website: "https://spam.test" })).status, 204);
+      assert.equal((await call(null, "POST", "/api/contact", { message: "Anonymous but long enough." })).status, 204);
+      assert.equal((await call(null, "POST", "/api/contact", message)).status, 204);
+      assert.equal((await query("SELECT count(*)::int AS total FROM contact_messages")).rows[0].total, 2);
+      assert.equal((await call(null, "POST", "/api/contact", message)).status, 204);
+      assert.equal((await call(null, "POST", "/api/contact", message)).status, 429);
+      assert.equal((await adminCall(moderator, "GET", "/api/admin/contact")).status, 403);
+      const listed = await (await adminCall(admin, "GET", "/api/admin/contact")).json();
+      assert.equal(listed.messages.length, 3);
+      const stored = listed.messages.find((item) => item.email);
+      assert.equal(stored.name, "Visitor");
+      assert.equal((await adminCall(moderator, "PATCH", `/api/admin/contact/${stored.id}`, { handled: true })).status, 403);
+      assert.equal((await adminCall(admin, "PATCH", `/api/admin/contact/${stored.id}`, { handled: true })).status, 204);
+      const after = await (await adminCall(admin, "GET", "/api/admin/contact")).json();
+      assert.equal(after.messages[0].id !== stored.id, true);
+      assert.equal(after.messages.find((item) => item.id === stored.id).handledByHandle, "root_admin");
+      await query("UPDATE contact_messages SET handled_at = now() - interval '4 months' WHERE id = $1", [stored.id]);
+      assert.equal((await runRetention()).contact_handled, 1);
+      for (const item of listed.messages.filter((entry) => entry.id !== stored.id))
+        assert.equal((await adminCall(admin, "DELETE", `/api/admin/contact/${item.id}`)).status, 204);
+      assert.equal((await query("SELECT count(*)::int AS total FROM contact_messages")).rows[0].total, 0);
+    });
+
     await t.test("an export contains the account's data as JSON and is rate limited", async () => {
       const own = await post(alice, "my exported post");
       await query("INSERT INTO post_likes (post_id, user_id) VALUES ($1, $2)", [await post(bob, "liked"), alice.id]);

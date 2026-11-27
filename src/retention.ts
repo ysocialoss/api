@@ -15,6 +15,8 @@ export const retentionRules = [
   { name: "moderation_activity", sql: "delete from moderation_activity where created_at < now() - interval '12 months'" },
   { name: "deleted_accounts", sql: "delete from deleted_accounts where deleted_at < now() - interval '35 days'" },
   { name: "csam_incidents", sql: "delete from csam_incidents where not hold and created_at < now() - interval '12 months'" },
+  { name: "contact_handled", sql: "delete from contact_messages where handled_at is not null and handled_at < now() - interval '3 months'" },
+  { name: "contact_unhandled", sql: "delete from contact_messages where handled_at is null and created_at < now() - interval '12 months'" },
   { name: "auth_sessions", sql: "delete from auth_sessions where expires_at < now()" },
   { name: "oauth_transactions", sql: "delete from oauth_transactions where expires_at < now()" },
 ] as const;

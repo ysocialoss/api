@@ -18,6 +18,7 @@ import { editPost, postContentSchema } from "./post-edit.ts";
 import { publishUserPostVisibility, removeUser } from "./user-removal.ts";
 import { adminAppeals, recordDecision, splitGround } from "./moderation.ts";
 import adminSafety from "./safety/admin-safety.ts";
+import adminContact from "./admin-contact.ts";
 import { badgeDetails, badgeIcons, badgePresets } from "./profile-badges.ts";
 import { pronounsSchema } from "./pronouns.ts";
 import { displayNameSchema } from "./display-name.ts";
@@ -35,6 +36,7 @@ router.use((_req, res, next) => {
 router.use("/reports", adminReports);
 router.use("/appeals", adminAppeals);
 router.use("/safety", adminSafety);
+router.use("/contact", adminContact);
 router.use("/activity", adminActivity);
 router.use("/system", adminSystem);
 router.use("/changelog", adminChangelog);

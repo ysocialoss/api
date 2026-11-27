@@ -978,3 +978,16 @@ export const adventRewards = pgTable("advent_rewards", {
   primaryKey({ columns: [table.userId, table.year, table.day] }),
   check("advent_rewards_day_check", sql`${table.day} in (7, 14, 24)`),
 ]);
+
+export const contactMessages = pgTable("contact_messages", {
+  id: uuid().defaultRandom().primaryKey(),
+  name: text(),
+  email: text(),
+  message: text().notNull(),
+  handledAt: timestamp("handled_at", { withTimezone: true, precision: 3 }),
+  handledByHandle: text("handled_by_handle"),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  index("contact_messages_queue_idx").on(table.handledAt, table.createdAt),
+  check("contact_messages_text_check", sql`char_length(${table.message}) between 10 and 2000 and char_length(${table.name}) <= 100 and char_length(${table.email}) <= 254`),
+]);
