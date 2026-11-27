@@ -298,15 +298,16 @@ router.post("/terms", async (req, res) => {
   const input = z.strictObject({
     version: z.literal(termsVersion),
     acceptTerms: z.literal(true),
-    ageConfirmed: z.literal(true),
+    ageConfirmed: z.literal(true).optional(),
   }).safeParse(req.body);
   if (!input.success) throw new AuthError(400, "terms_required");
   await db.transaction(async (tx) => {
-    await tx.update(users).set({
+    const [updated] = await tx.update(users).set({
       termsVersion,
       termsAcceptedAt: new Date(),
-      ageConfirmedAt: sql`coalesce(${users.ageConfirmedAt}, now())`,
-    }).where(eq(users.id, user.id));
+      ageConfirmedAt: input.data.ageConfirmed ? sql`coalesce(${users.ageConfirmedAt}, now())` : users.ageConfirmedAt,
+    }).where(eq(users.id, user.id)).returning({ ageConfirmedAt: users.ageConfirmedAt });
+    if (!updated?.ageConfirmedAt) throw new AuthError(400, "terms_required");
     await publishAccountChange(tx, user.id);
   });
   res.sendStatus(204);

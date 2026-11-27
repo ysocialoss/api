@@ -99,6 +99,7 @@ export async function readSessionHash(tokenHash: string) {
             feedFreshness: users.feedFreshness,
             feedReplies: users.feedReplies,
             termsVersion: users.termsVersion,
+            ageConfirmed: sql<boolean>`${users.ageConfirmedAt} is not null`,
             namePaintsDisabled: users.namePaintsDisabled,
             namePaintAnimationsDisabled: users.namePaintAnimationsDisabled,
             ...banDetailsSelection,
