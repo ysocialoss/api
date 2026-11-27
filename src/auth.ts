@@ -177,7 +177,7 @@ router.get("/me", async (req, res) => {
   });
 });
 const navigationItems = z.enum([
-  "feed", "search", "messages", "activity", "communities", "profile", "saved",
+  "feed", "following", "search", "messages", "activity", "communities", "profile", "saved",
 ]);
 const navigationInput = z.strictObject({
   userId: z.uuid(),
