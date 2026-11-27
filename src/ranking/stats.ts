@@ -351,7 +351,10 @@ async function volume() {
       (select min(r.created_at) from feed_candidates c join feed_requests r on r.id = c.request_id)
     union all
     select 'feed_counters', (select count(*) from feed_counters), pg_total_relation_size('feed_counters'),
-      (select min(day)::timestamptz from feed_counters)`);
+      (select min(day)::timestamptz from feed_counters)
+    union all
+    select 'feed_feedback', (select count(*) from feed_feedback), pg_total_relation_size('feed_feedback'),
+      (select min(created_at) from feed_feedback)`);
   const [due] = await rows<Record<string, string>>(sql`
     select
       (select count(*) from feed_events where origin = 'client' and created_at < now() - interval '180 days') as events_client,
@@ -359,7 +362,8 @@ async function volume() {
       (select count(*) from feed_requests where mode = 'personal' and created_at < now() - interval '180 days') as requests_personal,
       (select count(*) from feed_requests where mode = 'public' and created_at < now() - interval '2 days') as requests_public,
       (select count(*) from feed_candidates c join feed_requests r on r.id = c.request_id
-        where c.served_at is null and r.created_at < now() - interval '14 days') as candidates_unserved`);
+        where c.served_at is null and r.created_at < now() - interval '14 days') as candidates_unserved,
+      (select count(*) from feed_feedback where expires_at < now()) as feedback_expired`);
   return {
     tables: tables.map((row) => ({ name: row.name, rows: num(row.rows), bytes: num(row.bytes), oldest: row.oldest && new Date(row.oldest).toISOString() })),
     retentionDue: [
@@ -368,7 +372,75 @@ async function volume() {
       { rule: "Personal feed requests older than 180 days", rows: num(due?.requests_personal) },
       { rule: "Public feed requests older than 2 days", rows: num(due?.requests_public) },
       { rule: "Unserved candidates older than 14 days", rows: num(due?.candidates_unserved) },
+      { rule: "Expired feed feedback", rows: num(due?.feedback_expired) },
     ],
+  };
+}
+
+const controlTypes = sql.raw(`('more', 'less', 'snooze', 'topic_more', 'topic_less')`);
+
+async function controls(range: number) {
+  const [users] = await rows<Record<string, string>>(sql`
+    select
+      (select count(*) from users where banned_at is null and feed_choice_at is not null and feed_personalize) as opted_in,
+      (select count(distinct user_id) from feed_events where type in ${controlTypes} and created_at >= ${since(range)}) as acted,
+      (select count(distinct user_id) from feed_feedback where expires_at is null or expires_at > now()) as holders,
+      (select count(*) from users where banned_at is null and (feed_discovery <> 0 or feed_freshness <> 0 or feed_replies <> 0)) as tuned`);
+  const holders = num(users?.holders);
+  const optedIn = num(users?.opted_in);
+  const [active] = await rows<Record<string, string>>(sql`
+    select
+      count(*) filter (where kind = 'post' and direction < 0) as not_interested,
+      count(*) filter (where kind = 'post' and direction > 0) as interested,
+      count(*) filter (where kind = 'snooze') as snoozes,
+      count(*) filter (where kind = 'author') as authors,
+      count(*) filter (where kind = 'topic' and direction > 0) as topics_more,
+      count(*) filter (where kind = 'topic' and direction < 0) as topics_less
+    from feed_feedback where expires_at is null or expires_at > now()`);
+  const daily = await rows<Record<string, string>>(sql`
+    select to_char(d, 'YYYY-MM-DD') as day,
+      count(e.id) filter (where e.type in ('less', 'snooze')) as less,
+      count(e.id) filter (where e.type = 'more') as more,
+      count(e.id) filter (where e.type in ('topic_more', 'topic_less')) as topic
+    from ${days(range)} d
+    left join feed_events e on e.type in ${controlTypes} and e.created_at >= d and e.created_at < d + interval '1 day'
+    group by d order by d`);
+  const sliders = await rows<{ slider: string; level: number; users: string }>(sql`
+    select s.slider, s.level, count(*) as users from users u
+    cross join lateral (values ('discovery', u.feed_discovery), ('freshness', u.feed_freshness), ('replies', u.feed_replies)) as s(slider, level)
+    where u.banned_at is null and u.feed_choice_at is not null and u.feed_personalize
+    group by s.slider, s.level`);
+  const topics = await rows<{ topic: string; direction: number; users: string }>(sql`
+    select topic, direction, count(distinct user_id) as users from feed_feedback
+    where kind = 'topic' group by topic, direction having count(distinct user_id) >= ${minUsers}
+    order by count(distinct user_id) desc, topic limit 10`);
+  const enough = optedIn >= minUsers;
+  const levels = [-2, -1, 0, 1, 2];
+  return {
+    enough,
+    optedIn,
+    usersActed: enough ? num(users?.acted) : null,
+    usersWithControls: holders >= minUsers ? holders : null,
+    usersTuned: enough ? num(users?.tuned) : null,
+    active: {
+      notInterested: num(active?.not_interested),
+      interested: num(active?.interested),
+      snoozes: num(active?.snoozes),
+      authors: num(active?.authors),
+      topicsMore: num(active?.topics_more),
+      topicsLess: num(active?.topics_less),
+    },
+    actionsByDay: daily.map((row) => ({ day: row.day!, less: num(row.less), more: num(row.more), topic: num(row.topic) })),
+    sliders: enough
+      ? (["discovery", "freshness", "replies"] as const).map((slider) => ({
+        slider,
+        levels: levels.map((level) => ({
+          level,
+          users: num(sliders.find((row) => row.slider === slider && Number(row.level) === level)?.users),
+        })),
+      }))
+      : [],
+    topTopics: topics.map((row) => ({ topic: row.topic, direction: Number(row.direction) > 0 ? "more" as const : "less" as const, users: num(row.users) })),
   };
 }
 
@@ -382,7 +454,7 @@ async function guarded<T>(load: () => Promise<T>): Promise<T | { error: true }> 
 }
 
 export async function feedDashboard(range: number) {
-  const [adoptionInfo, pipelineInfo, engagementInfo, positionInfo, diversityInfo, trainingInfo, modelInfo, volumeInfo] = await Promise.all([
+  const [adoptionInfo, pipelineInfo, engagementInfo, positionInfo, diversityInfo, trainingInfo, modelInfo, volumeInfo, controlsInfo] = await Promise.all([
     guarded(() => adoption(range)),
     guarded(() => pipeline(range)),
     guarded(() => engagement(range)),
@@ -391,6 +463,7 @@ export async function feedDashboard(range: number) {
     guarded(training),
     guarded(model),
     guarded(volume),
+    guarded(() => controls(range)),
   ]);
   return {
     generatedAt: new Date().toISOString(),
@@ -404,6 +477,7 @@ export async function feedDashboard(range: number) {
     training: trainingInfo,
     model: modelInfo,
     volume: volumeInfo,
+    controls: controlsInfo,
   };
 }
 
@@ -424,7 +498,8 @@ export async function feedHealth() {
       (select coalesce(sum(value), 0) from feed_counters where name = 'public_cache_hit' and day >= (now() - interval '1 day')::date) as hits,
       (select coalesce(sum(value), 0) from feed_counters where name = 'public_cache_miss' and day >= (now() - interval '1 day')::date) as misses,
       (select coalesce(sum(value), 0) from feed_counters where name = 'choice_unlock_nav' and day >= (now() - interval '7 days')::date) as unlocks,
-      (select coalesce(sum(value), 0) from feed_counters where name = 'choice_decline_nav' and day >= (now() - interval '7 days')::date) as declines`);
+      (select coalesce(sum(value), 0) from feed_counters where name = 'choice_decline_nav' and day >= (now() - interval '7 days')::date) as declines,
+      (select count(*) from feed_events where type in ${controlTypes} and created_at > now() - interval '7 days') as controls_7d`);
   return {
     optedIn: num(row?.opted_in),
     optedOut: num(row?.opted_out),
@@ -436,5 +511,6 @@ export async function feedHealth() {
     caughtUp24h: num(row?.caught_up),
     publicCache24h: { hits: num(row?.hits), misses: num(row?.misses) },
     navChoices7d: { unlocks: num(row?.unlocks), declines: num(row?.declines) },
+    controlsUsed7d: num(row?.controls_7d),
   };
 }
