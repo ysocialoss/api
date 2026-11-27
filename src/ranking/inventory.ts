@@ -14,7 +14,10 @@ const popularity = sql`(
   + 2 * (select count(*) from posts c where c.parent_id = p.id and c.hidden_at is null)
   + 3 * (select count(*) from post_reposts r where r.post_id = p.id and r.audience = 'public'))`;
 
-async function query(viewerId: string | null, chainId: string | null, hours: number, limit: number) {
+export type InventoryControls = { excludedPosts: string[]; snoozedAuthors: string[]; noReplies: boolean };
+const uuidArray = (ids: string[]) => sql`${`{${ids.join(",")}}`}::uuid[]`;
+
+async function query(viewerId: string | null, chainId: string | null, hours: number, limit: number, controls: InventoryControls | null) {
   const window = sql`now() - ${hours} * interval '1 hour'`;
   const follows = viewerId ? sql`(select following_id from user_follows where follower_id = ${viewerId}::uuid)` : null;
   const personalSources = follows
@@ -50,6 +53,12 @@ async function query(viewerId: string | null, chainId: string | null, hours: num
           and not exists (
             select 1 from posts c where c.parent_id = p.id and c.author_id in ${follows!} and c.created_at > e.created_at))`
     : sql``;
+  const controlFilters = viewerId && controls
+    ? sql`
+      ${controls.excludedPosts.length ? sql`and p.id <> all(${uuidArray(controls.excludedPosts)})` : sql``}
+      ${controls.snoozedAuthors.length ? sql`and p.author_id <> all(${uuidArray(controls.snoozedAuthors)})` : sql``}
+      ${controls.noReplies ? sql`and p.parent_id is null` : sql``}`
+    : sql``;
   const chainFilter = chainId
     ? sql`and not exists (
         select 1 from feed_candidates fc join feed_requests fr on fr.id = fc.request_id
@@ -73,6 +82,7 @@ async function query(viewerId: string | null, chainId: string | null, hours: num
     join users a on a.id = p.author_id and a.banned_at is null
     where p.hidden_at is null
       ${viewerFilters}
+      ${controlFilters}
       ${chainFilter}
     group by p.id, p.author_id, p.created_at
     order by p.created_at desc
@@ -93,10 +103,12 @@ export async function loadInventory(options: {
   wideWindowHours: number;
   minCandidates: number;
   maxCandidates: number;
+  controls?: InventoryControls | null;
 }) {
-  const first = await query(options.viewerId, options.chainId, options.windowHours, options.maxCandidates);
+  const controls = options.controls ?? null;
+  const first = await query(options.viewerId, options.chainId, options.windowHours, options.maxCandidates, controls);
   if (first.length >= options.minCandidates || options.wideWindowHours <= options.windowHours) return first;
-  return query(options.viewerId, options.chainId, options.wideWindowHours, options.maxCandidates);
+  return query(options.viewerId, options.chainId, options.wideWindowHours, options.maxCandidates, controls);
 }
 
 export function countSources(candidates: { sources: string[] }[]) {

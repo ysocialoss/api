@@ -1,13 +1,15 @@
 import { featureIndex } from "./model.ts";
 
-export const reasonKinds = ["explore", "network", "following", "conversation", "social", "nearby", "popular", "recent"] as const;
+export const reasonKinds = ["explore", "network", "following", "conversation", "social", "nearby", "popular", "recent", "topic", "control"] as const;
 export type Reason = (typeof reasonKinds)[number];
 
-export function reasonFor(item: { sources: string[]; features: number[]; explore: boolean }): Reason {
+export function reasonFor(item: { sources: string[]; features: number[]; explore: boolean; boost?: { author: number; topic: number } }): Reason {
   const feature = (name: keyof typeof featureIndex) => item.features[featureIndex[name]] ?? 0;
   if (item.explore) return "explore";
   if (item.sources.includes("followee_repost")) return "network";
   if (item.sources.includes("followee_reply") || feature("followee_replied") > 0) return "conversation";
+  if (item.boost && item.boost.topic > 1.05) return "topic";
+  if (item.boost && item.boost.author > 1.05) return "control";
   if (feature("in_network") >= 0.5) return "following";
   if (feature("social_likes") > 0) return "social";
   if (feature("author_proximity") >= 0.3) return "nearby";

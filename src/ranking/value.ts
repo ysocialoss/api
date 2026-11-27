@@ -1,6 +1,7 @@
 import { headNames } from "./config.ts";
 import type { FeedConfig } from "./config.ts";
 import { featureIndex } from "./model.ts";
+import { neutralFactors, type Factors } from "./controls.ts";
 
 export type Scored = {
   postId: string;
@@ -10,11 +11,12 @@ export type Scored = {
   features: number[];
   predictions: number[];
   score: number;
+  boost?: { author: number; topic: number };
 };
 
 const head = Object.fromEntries(headNames.map((name, index) => [name, index])) as Record<(typeof headNames)[number], number>;
 
-export function value(predictions: number[], features: number[], ageHours: number, config: FeedConfig) {
+export function value(predictions: number[], features: number[], ageHours: number, config: FeedConfig, factors: Factors = neutralFactors) {
   const w = config.weights;
   const inNetwork = (features[featureIndex.in_network] ?? 0) >= 0.5;
   let total =
@@ -28,8 +30,10 @@ export function value(predictions: number[], features: number[], ageHours: numbe
     (inNetwork ? 0 : w.follow * predictions[head.follow]!) -
     w.negative * predictions[head.negative]!;
   total = Math.max(total, 0.0001);
-  const decay = Math.pow(0.5, Math.max(0, ageHours) / config.freshnessHalfLifeHours);
+  const decay = Math.pow(0.5, Math.max(0, ageHours) / (config.freshnessHalfLifeHours * factors.halfLifeScale));
   total *= config.freshnessFloor + (1 - config.freshnessFloor) * decay;
   if ((features[featureIndex.seen_before] ?? 0) >= 0.5) total *= config.seenPenalty;
-  return total;
+  if ((features[featureIndex.is_reply] ?? 0) >= 0.5) total *= factors.replies;
+  if (!inNetwork) total *= factors.discovery;
+  return total * factors.author * factors.topic;
 }

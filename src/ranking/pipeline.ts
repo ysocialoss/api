@@ -12,6 +12,8 @@ import { loadPosts, loadUsers, type PostRecord, type RepostContexts } from "../f
 import { loadConfig, type FeedConfig } from "./config.ts";
 import { bumpCounter } from "./counters.ts";
 import { computeFeatures, registerFeatureSet } from "./features.ts";
+import { controlsSnapshot, factorsFor, type Controls } from "./controls.ts";
+import { loadControls, loadPostTopics } from "./feedback.ts";
 import { countSources, loadInventory } from "./inventory.ts";
 import { featureVersion, loadModel, predict } from "./model.ts";
 import { reasonFor, type Reason } from "./reasons.ts";
@@ -61,13 +63,22 @@ function scoreAll(
   features: Map<string, number[]>,
   model: Awaited<ReturnType<typeof loadModel>>,
   config: FeedConfig,
+  controls: Controls | null,
+  topics: Map<string, string[]>,
 ) {
   const scored: Scored[] = [];
   for (const candidate of candidates) {
     const vector = features.get(candidate.postId);
     if (!vector) continue;
     const predictions = predict(model, vector);
-    scored.push({ ...candidate, features: vector, predictions, score: value(predictions, vector, candidate.ageHours, config) });
+    const factors = controls ? factorsFor(controls, config, candidate, topics.get(candidate.postId) ?? []) : undefined;
+    scored.push({
+      ...candidate,
+      features: vector,
+      predictions,
+      score: value(predictions, vector, candidate.ageHours, config, factors),
+      boost: factors && { author: factors.author, topic: factors.topic },
+    });
   }
   return scored;
 }
@@ -83,6 +94,8 @@ async function rank(options: { viewerId: string | null; mode: FeedMode; chainId:
   };
   await registerFeatureSet();
   const [{ id: configId, config }, model] = await Promise.all([loadConfig(), loadModel()]);
+  const controls = options.mode === "personal" && options.viewerId ? await loadControls(options.viewerId, config) : null;
+  const repliesLevel = controls ? Math.min(4, Math.max(0, controls.sliders.replies + 2)) : 2;
   const candidates = await loadInventory({
     viewerId: options.viewerId,
     chainId: options.continuation ? options.chainId : null,
@@ -90,11 +103,20 @@ async function rank(options: { viewerId: string | null; mode: FeedMode; chainId:
     wideWindowHours: config.wideWindowHours,
     minCandidates: config.minCandidates,
     maxCandidates: config.maxCandidates,
+    controls: controls && {
+      excludedPosts: controls.excludedPosts,
+      snoozedAuthors: controls.snoozedAuthors,
+      noReplies: config.controls.repliesFactor[repliesLevel] === 0,
+    },
   });
   lap("inventory");
-  const features = await computeFeatures(options.viewerId, candidates.map((candidate) => candidate.postId));
+  const postIds = candidates.map((candidate) => candidate.postId);
+  const [features, topics] = await Promise.all([
+    computeFeatures(options.viewerId, postIds),
+    controls ? loadPostTopics(postIds) : Promise.resolve(new Map<string, string[]>()),
+  ]);
   lap("features");
-  const scored = scoreAll(candidates, features, model, config);
+  const scored = scoreAll(candidates, features, model, config, controls, topics);
   lap("score");
   const requestId = randomUUID();
   const placed = rerank(scored, config, requestId, config.storedCandidates);
@@ -114,6 +136,7 @@ async function rank(options: { viewerId: string | null; mode: FeedMode; chainId:
       candidateCount: candidates.length,
       latencyMs: 0,
       timings,
+      prefs: controls ? controlsSnapshot(controls) : null,
     });
     if (placed.length)
       await tx.insert(feedCandidates).values(placed.map((item) => ({
