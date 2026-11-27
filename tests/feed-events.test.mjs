@@ -195,7 +195,7 @@ test("feed activity is logged, gated by personalization, and the following feed 
 
     await t.test("turning personalization off stops all logging and reset clears it", async () => {
       const target = await post(bob, "quiet");
-      assert.deepEqual(await (await call(carol, "GET", "/api/feed/preferences")).json(), { personalize: true, chosen: true });
+      assert.deepEqual(await (await call(carol, "GET", "/api/feed/preferences")).json(), { personalize: true, chosen: true, discovery: 0, freshness: 0, replies: 0 });
       const me = await (await call(carol, "GET", "/auth/me")).json();
       assert.equal(me.user.feedPersonalize, true);
       const invalid = await call(carol, "PATCH", "/api/feed/preferences", { personalize: "no" });
@@ -203,7 +203,7 @@ test("feed activity is logged, gated by personalization, and the following feed 
       assert.equal((await invalid.json()).error, "invalid_feed_preferences");
       await call(carol, "PUT", `/api/posts/${target}/save`);
       assert.equal((await events(carol.id)).length, 1);
-      assert.deepEqual(await (await call(carol, "PATCH", "/api/feed/preferences", { personalize: false })).json(), { personalize: false, chosen: true, cleared: 1 });
+      assert.deepEqual(await (await call(carol, "PATCH", "/api/feed/preferences", { personalize: false })).json(), { personalize: false, chosen: true, cleared: 1, discovery: 0, freshness: 0, replies: 0 });
       assert.equal((await query("SELECT 1 FROM feed_events WHERE user_id = $1", [carol.id])).rowCount, 0);
       await call(carol, "DELETE", `/api/posts/${target}/save`);
 
@@ -225,7 +225,7 @@ test("feed activity is logged, gated by personalization, and the following feed 
     await t.test("nothing is recorded before the user has made the feed choice", async () => {
       const ivan = await account("ivan", "user", false);
       const target = await post(bob, "undecided");
-      assert.deepEqual(await (await call(ivan, "GET", "/api/feed/preferences")).json(), { personalize: true, chosen: false });
+      assert.deepEqual(await (await call(ivan, "GET", "/api/feed/preferences")).json(), { personalize: true, chosen: false, discovery: 0, freshness: 0, replies: 0 });
       assert.equal((await call(ivan, "POST", "/api/feed/events", batch([
         { type: "impression", postId: target, surface: "latest", seq: 900, at: at() },
       ]))).status, 204);
@@ -233,7 +233,7 @@ test("feed activity is logged, gated by personalization, and the following feed 
       assert.equal((await events(ivan.id)).length, 0);
       await query("INSERT INTO feed_events (user_id, type, post_id, author_id, origin) VALUES ($1, 'like', $2, $3, 'backfill')", [ivan.id, target, bob.id]);
       const kept = await (await call(ivan, "PATCH", "/api/feed/preferences", { personalize: false })).json();
-      assert.deepEqual(kept, { personalize: false, chosen: true, cleared: 1 });
+      assert.deepEqual(kept, { personalize: false, chosen: true, cleared: 1, discovery: 0, freshness: 0, replies: 0 });
     });
 
     await t.test("the following feed shows followees, their reposts and the viewer, nothing else", async () => {

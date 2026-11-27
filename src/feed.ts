@@ -4,14 +4,18 @@ import { Router, type Request } from "express";
 import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "./db/index.ts";
-import { feedEvents, feedRequests, users } from "./db/schema.ts";
+import { feedEvents, feedFeedback, feedRequests, users } from "./db/schema.ts";
 import { cookie, requireApprovedUser, requireUser } from "./auth/request.ts";
 import { readSession } from "./auth/session.ts";
 import { AuthError } from "./auth/provider.ts";
 import { followingFeed } from "./feed-entries.ts";
-import { clientKind, ingestClientEvents } from "./ranking/events.ts";
+import { clientKind, ingestClientEvents, readFeedContext } from "./ranking/events.ts";
 import { bumpCounter } from "./ranking/counters.ts";
 import { forYouPage, shadowFollowing } from "./ranking/pipeline.ts";
+import { loadConfig } from "./ranking/config.ts";
+import { clearFeedback, listFeedback, removeFeedback, upsertFeedback } from "./ranking/feedback.ts";
+import { explain } from "./ranking/explain.ts";
+import { isTopicName, normalizeTopic } from "./topics-text.ts";
 
 const router = Router();
 router.use((_req, res, next) => {
@@ -96,29 +100,105 @@ router.get("/following", async (req, res) => {
 
 router.get("/preferences", async (req, res) => {
   const user = await requireApprovedUser(req);
-  res.json({ personalize: user.feedPersonalize, chosen: user.feedChoiceAt !== null });
+  res.json({
+    personalize: user.feedPersonalize,
+    chosen: user.feedChoiceAt !== null,
+    discovery: user.feedDiscovery,
+    freshness: user.feedFreshness,
+    replies: user.feedReplies,
+  });
 });
 
-const preferencesSchema = z.strictObject({ personalize: z.boolean(), source: z.enum(["nav"]).optional() });
+const sliderSchema = z.number().int().min(-2).max(2);
+const preferencesSchema = z.strictObject({
+  personalize: z.boolean().optional(),
+  discovery: sliderSchema.optional(),
+  freshness: sliderSchema.optional(),
+  replies: sliderSchema.optional(),
+  source: z.enum(["nav"]).optional(),
+}).refine((value) => value.personalize !== undefined || value.discovery !== undefined || value.freshness !== undefined || value.replies !== undefined)
+  .refine((value) => value.source === undefined || value.personalize !== undefined);
 router.patch("/preferences", async (req, res) => {
   const user = await requireUser(req);
   const input = preferencesSchema.safeParse(req.body);
   if (!input.success) throw new AuthError(400, "invalid_feed_preferences");
+  const { personalize, discovery, freshness, replies } = input.data;
   const alreadyOn = user.feedPersonalize && user.feedChoiceAt !== null;
   const saved = await db.transaction(async (tx) => {
     const [row] = await tx
       .update(users)
-      .set({ feedPersonalize: input.data.personalize, feedChoiceAt: sql`coalesce(${users.feedChoiceAt}, now())`, updatedAt: sql`now()` })
+      .set({
+        ...(personalize === undefined ? {} : { feedPersonalize: personalize, feedChoiceAt: sql`coalesce(${users.feedChoiceAt}, now())` }),
+        ...(discovery === undefined ? {} : { feedDiscovery: discovery }),
+        ...(freshness === undefined ? {} : { feedFreshness: freshness }),
+        ...(replies === undefined ? {} : { feedReplies: replies }),
+        updatedAt: sql`now()`,
+      })
       .where(eq(users.id, user.id))
-      .returning({ personalize: users.feedPersonalize });
-    if (input.data.personalize && !alreadyOn) await backfillFeedEvents(tx, user.id);
-    if (input.data.personalize) return { ...row, chosen: true, cleared: 0 };
+      .returning({
+        personalize: users.feedPersonalize,
+        chosenAt: users.feedChoiceAt,
+        discovery: users.feedDiscovery,
+        freshness: users.feedFreshness,
+        replies: users.feedReplies,
+      });
+    const { chosenAt, ...values } = row!;
+    const result = { ...values, chosen: chosenAt !== null, cleared: 0 };
+    if (personalize === true && !alreadyOn) await backfillFeedEvents(tx, user.id);
+    if (personalize !== false) return result;
     const cleared = await tx.delete(feedEvents).where(eq(feedEvents.userId, user.id));
     await tx.delete(feedRequests).where(eq(feedRequests.userId, user.id));
-    return { ...row, chosen: true, cleared: cleared.rowCount ?? 0 };
+    return { ...result, cleared: cleared.rowCount ?? 0 };
   });
-  if (input.data.source === "nav") await bumpCounter(input.data.personalize ? "choice_unlock_nav" : "choice_decline_nav");
+  if (input.data.source === "nav") await bumpCounter(personalize ? "choice_unlock_nav" : "choice_decline_nav");
   res.json(saved);
+});
+
+const direction = z.union([z.literal(1), z.literal(-1)]);
+const lowerUuid = z.uuid().transform((id) => id.toLowerCase());
+const topicSchema = z.string().max(40).transform((value) => normalizeTopic(value.trim().replace(/^#/, ""))).refine(isTopicName);
+const feedbackSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("post"), postId: lowerUuid, direction }),
+  z.strictObject({ kind: z.literal("author"), authorId: lowerUuid, direction }),
+  z.strictObject({ kind: z.literal("snooze"), authorId: lowerUuid }),
+  z.strictObject({ kind: z.literal("topic"), topic: topicSchema, direction }),
+]);
+
+router.get("/feedback", async (req, res) => {
+  const user = await requireApprovedUser(req);
+  res.json(await listFeedback(user.id));
+});
+
+router.post("/feedback", async (req, res) => {
+  const user = await requireApprovedUser(req);
+  const input = feedbackSchema.safeParse(req.body);
+  if (!input.success) throw new AuthError(400, "invalid_feed_feedback");
+  const { config } = await loadConfig();
+  const row = await upsertFeedback(user.id, input.data, readFeedContext(req), config);
+  res.status(201).json({ id: row.id, direction: row.direction, expiresAt: row.expiresAt?.toISOString() ?? null });
+});
+
+router.delete("/feedback", async (req, res) => {
+  const user = await requireApprovedUser(req);
+  const kind = z.enum(["post", "author", "snooze", "topic"]).safeParse(req.query.kind);
+  if (!kind.success) throw new AuthError(400, "invalid_feed_feedback");
+  res.json({ removed: await clearFeedback(user.id, kind.data) });
+});
+
+router.delete("/feedback/:id", async (req, res) => {
+  const user = await requireApprovedUser(req);
+  const id = z.uuid().safeParse(req.params.id);
+  if (!id.success) throw new AuthError(404, "feed_feedback_not_found");
+  await removeFeedback(user.id, id.data.toLowerCase());
+  res.status(204).end();
+});
+
+router.get("/why/:postId", async (req, res) => {
+  const user = await requireApprovedUser(req);
+  const postId = z.uuid().safeParse(req.params.postId);
+  const requestId = z.uuid().safeParse(req.query.request);
+  if (!postId.success || !requestId.success) throw new AuthError(404, "feed_explanation_unavailable");
+  res.json(await explain(user.id, postId.data.toLowerCase(), requestId.data.toLowerCase()));
 });
 
 router.post("/choice-declined", async (req, res) => {
@@ -132,6 +212,8 @@ router.post("/reset", async (req, res) => {
   const result = await db.transaction(async (tx) => {
     const cleared = await tx.delete(feedEvents).where(eq(feedEvents.userId, user.id));
     await tx.delete(feedRequests).where(eq(feedRequests.userId, user.id));
+    await tx.delete(feedFeedback).where(eq(feedFeedback.userId, user.id));
+    await tx.update(users).set({ feedDiscovery: 0, feedFreshness: 0, feedReplies: 0, updatedAt: sql`now()` }).where(eq(users.id, user.id));
     return cleared.rowCount ?? 0;
   });
   res.json({ cleared: result });
