@@ -175,7 +175,7 @@ router.post("/feedback", async (req, res) => {
   if (!input.success) throw new AuthError(400, "invalid_feed_feedback");
   const { config } = await loadConfig();
   const row = await upsertFeedback(user.id, input.data, readFeedContext(req), config);
-  res.status(201).json({ id: row.id, direction: row.direction, expiresAt: row.expiresAt?.toISOString() ?? null });
+  res.status(201).json({ id: row.id, direction: row.direction, previousDirection: row.previousDirection, expiresAt: row.expiresAt?.toISOString() ?? null });
 });
 
 router.delete("/feedback", async (req, res) => {

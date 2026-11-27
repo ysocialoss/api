@@ -106,6 +106,7 @@ test("feed controls: feedback, snoozes, topics, sliders, explanations and reset"
     await t.test("not interested hides the post, lowers its author and topics, and records a less event", async () => {
       const created = await json(await feedback(viewer, { kind: "post", postId: annCats, direction: -1 }, { "X-Feed-Context": `for_you 0 ${baseline.page.requestId}` }), 201);
       assert.ok(created.expiresAt);
+      assert.equal(created.previousDirection, null);
       const after = await ranked();
       assert.ok(!after.ids.includes(annCats));
       near(ratio(after, baseline, annPlain), 0.7, "author");
@@ -116,6 +117,7 @@ test("feed controls: feedback, snoozes, topics, sliders, explanations and reset"
 
       const flipped = await json(await feedback(viewer, { kind: "post", postId: annCats, direction: 1 }), 201);
       assert.equal(flipped.id, created.id);
+      assert.equal(flipped.previousDirection, -1);
       const interested = await ranked();
       assert.ok(interested.ids.includes(annCats));
       near(ratio(interested, baseline, annPlain), 1.3, "interested author");

@@ -75,6 +75,14 @@ export async function upsertFeedback(userId: string, input: FeedbackInput, conte
       : input.kind === "topic"
         ? { target: [feedFeedback.userId, feedFeedback.topic], targetWhere: sql`${feedFeedback.topic} is not null` }
         : { target: [feedFeedback.userId, feedFeedback.kind, feedFeedback.authorId], targetWhere: sql`${feedFeedback.authorId} is not null` };
+    const same = input.kind === "post"
+      ? eq(feedFeedback.postId, input.postId)
+      : input.kind === "topic"
+        ? eq(feedFeedback.topic, input.topic)
+        : and(eq(feedFeedback.kind, input.kind), eq(feedFeedback.authorId, input.authorId));
+    const [previous] = await tx.select({ direction: feedFeedback.direction }).from(feedFeedback)
+      .where(and(eq(feedFeedback.userId, userId), same, sql`(${feedFeedback.expiresAt} is null or ${feedFeedback.expiresAt} > now())`))
+      .limit(1);
     const [row] = await tx.insert(feedFeedback).values({ ...values, expiresAt })
       .onConflictDoUpdate({ ...target, set: { direction, createdAt: sql`now()`, expiresAt } })
       .returning({ id: feedFeedback.id, expiresAt: feedFeedback.expiresAt, direction: feedFeedback.direction });
@@ -86,7 +94,7 @@ export async function upsertFeedback(userId: string, input: FeedbackInput, conte
       context,
       detail: input.kind === "topic" ? input.topic : null,
     });
-    return row!;
+    return { ...row!, previousDirection: previous?.direction ?? null };
   });
 }
 
