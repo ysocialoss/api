@@ -301,6 +301,21 @@ test("ranked feed: modes, paging, exclusions, shadow logging, fallback and admin
       assert.deepEqual(rows, [{ name: "choice_decline_nav", n: 2 }, { name: "choice_unlock_nav", n: 1 }]);
     });
 
+    await t.test("a busy window keeps older posts from followee activity in the inventory", async () => {
+      const { loadInventory } = await import("../src/ranking/inventory.ts");
+      const liked = await post(authors[4], "older but liked by a followee", 60 * 50);
+      await query("INSERT INTO post_likes (post_id, user_id) VALUES ($1, $2)", [liked, authors[0].id]);
+      for (let index = 0; index < 60; index++) await post(authors[3], `busy ${index}`, 1);
+      const inventory = await loadInventory({
+        viewerId: viewer.id, chainId: null, windowHours: 72, wideWindowHours: 168, minCandidates: 0, maxCandidates: 50,
+      });
+      assert.ok(inventory.length > 40 && inventory.length <= 50);
+      const found = inventory.find((candidate) => candidate.postId === liked);
+      assert.ok(found);
+      assert.ok(found.sources.includes("followee_like"));
+      assert.ok(inventory.filter((candidate) => candidate.sources.includes("recent")).length >= 20);
+    });
+
     await t.test("deleting posts and accounts cascades into stored feed rows", async () => {
       const page = await json(await forYou(viewer));
       const removed = page.posts[0].id;

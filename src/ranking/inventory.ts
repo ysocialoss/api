@@ -19,22 +19,23 @@ const uuidArray = (ids: string[]) => sql`${`{${ids.join(",")}}`}::uuid[]`;
 
 async function query(viewerId: string | null, chainId: string | null, hours: number, limit: number, controls: InventoryControls | null) {
   const window = sql`now() - ${hours} * interval '1 hour'`;
+  const quota = (share: number) => Math.max(10, Math.ceil(limit * share));
   const follows = viewerId ? sql`(select following_id from user_follows where follower_id = ${viewerId}::uuid)` : null;
   const personalSources = follows
     ? sql`
       union all
       (select r.post_id as id, 'followee_repost' as source from post_reposts r
         where r.user_id in ${follows} and r.created_at > ${window} and ${repostVisibleSql(viewerId)}
-        order by r.created_at desc limit 200)
+        order by r.created_at desc limit ${quota(0.15)})
       union all
       (select p.id, 'followee_reply' from posts p
         where p.parent_id is not null and p.author_id in ${follows} and p.created_at > ${window} and p.hidden_at is null
           and not exists (select 1 from posts parent where parent.id = p.parent_id and parent.author_id = p.author_id)
-        order by p.created_at desc limit 150)
+        order by p.created_at desc limit ${quota(0.1)})
       union all
       (select l.post_id, 'followee_like' from post_likes l
         where l.user_id in ${follows} and l.created_at > ${window}
-        order by l.created_at desc limit 200)`
+        order by l.created_at desc limit ${quota(0.15)})`
     : sql``;
   const viewerFilters = viewerId
     ? sql`
@@ -72,7 +73,7 @@ async function query(viewerId: string | null, chainId: string | null, hours: num
       union all
       (select p.id, 'popular' from posts p
         where p.parent_id is null and p.created_at > now() - interval '72 hours' and p.hidden_at is null
-        order by ${popularity} desc, p.created_at desc limit 100)
+        order by ${popularity} desc, p.created_at desc limit ${quota(0.15)})
       ${personalSources}
     )
     select p.id as post_id, p.author_id, extract(epoch from (now() - p.created_at)) / 3600 as age_hours,
@@ -85,7 +86,7 @@ async function query(viewerId: string | null, chainId: string | null, hours: num
       ${controlFilters}
       ${chainFilter}
     group by p.id, p.author_id, p.created_at
-    order by p.created_at desc
+    order by bool_or(s.source <> 'recent') desc, p.created_at desc
     limit ${limit}
   `);
   return rows.map((row): Candidate => ({
