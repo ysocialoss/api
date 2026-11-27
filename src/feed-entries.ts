@@ -146,15 +146,20 @@ async function chronologicalFeed(
   };
 }
 
-type ProfileRow = { post_id: string; kind: "repost" | "quote"; audience: Audience | null };
+type ProfileRow = { post_id: string; at_ms: string; kind: "repost" | "quote"; audience: Audience | null };
 /**
  * A profile's Reposts tab: what the person reposted (as the viewer may see it)
  * and the quote posts they wrote, newest first. A quote is listed as its own
  * post; a plain repost lists the original with the person as `repostedBy`.
  */
-export async function profileReposts(profile: FeedUser, viewerId: string | null, limit = 20) {
+export async function profileReposts(
+  profile: FeedUser,
+  viewerId: string | null,
+  limit = 20,
+  cursor?: { createdAt: string; id: string },
+) {
   const { rows } = await db.execute<ProfileRow>(sql`
-    select post_id, at, kind, audience from (
+    select post_id, ${epochMs(sql`at`)} as at_ms, kind, audience from (
       select r.post_id, r.created_at as at, 'repost' as kind, r.audience
       from post_reposts r
       join posts p on p.id = r.post_id
@@ -163,18 +168,28 @@ export async function profileReposts(profile: FeedUser, viewerId: string | null,
       select q.id, q.created_at, 'quote', null::text
       from posts q where q.author_id = ${profile.id} and q.is_quote and q.hidden_at is null
     ) e
+    ${cursor ? sql`where (at, post_id) < (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)` : sql``}
     order by at desc, post_id desc
-    limit ${limit}
+    limit ${limit + 1}
   `);
-  const postsById = await loadPosts(rows.map((row) => row.post_id), viewerId);
+  const page = rows.slice(0, limit);
+  const postsById = await loadPosts(page.map((row) => row.post_id), viewerId);
   const list: PostRecord[] = [];
   const repostedBy: RepostContexts = {};
-  for (const row of rows) {
+  for (const row of page) {
     const post = postsById.get(row.post_id);
     if (!post) continue;
     list.push(post);
     if (row.kind === "repost" && row.audience)
       repostedBy[post.id] = { by: profile, audience: row.audience, others: 0 };
   }
-  return { posts: list, repostedBy };
+  const last = page.at(-1);
+  return {
+    posts: list,
+    repostedBy,
+    nextCursor:
+      rows.length > limit && last
+        ? Buffer.from(JSON.stringify({ createdAt: new Date(Number(last.at_ms)).toISOString(), id: last.post_id })).toString("base64url")
+        : null,
+  };
 }
