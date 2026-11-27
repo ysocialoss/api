@@ -3,6 +3,7 @@ import { and, asc, eq, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import { AuthError } from "./auth/provider.ts";
 import { requireApprovedUser, requireUser } from "./auth/request.ts";
+import { berlinDate } from "./berlin-time.ts";
 import { db } from "./db/index.ts";
 import { adventDoors, adventRewards } from "./db/schema.ts";
 
@@ -12,14 +13,12 @@ router.use((_req, res, next) => {
   next();
 });
 
-const HOUR = 3_600_000;
 export const EVE_DAY = 24;
 export const rewardDays = [1, 7, 14, EVE_DAY];
 
 export function doorIsOpenable(year: number, day: number, at: Date) {
-  const start = Date.UTC(year, 11, day) - 14 * HOUR;
-  const end = Date.UTC(year, 11, day + 1) + 12 * HOUR;
-  return at.getTime() >= start && at.getTime() < end;
+  const today = berlinDate(at);
+  return today.year === year && today.month === 11 && today.day === day;
 }
 
 const yearSchema = z.coerce.number().int().min(2000).max(9999);
