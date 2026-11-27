@@ -91,6 +91,9 @@ export const users = pgTable(
     hatSide: text("hat_side"),
     feedPersonalize: boolean("feed_personalize").notNull().default(true),
     feedChoiceAt: timestamp("feed_choice_at", { withTimezone: true, precision: 3 }),
+    feedDiscovery: smallint("feed_discovery").notNull().default(0),
+    feedFreshness: smallint("feed_freshness").notNull().default(0),
+    feedReplies: smallint("feed_replies").notNull().default(0),
     termsVersion: text("terms_version"),
     termsAcceptedAt: timestamp("terms_accepted_at", { withTimezone: true, precision: 3 }),
     ageConfirmedAt: timestamp("age_confirmed_at", { withTimezone: true, precision: 3 }),
@@ -111,6 +114,9 @@ export const users = pgTable(
     ),
     check("users_bio_check", sql`char_length(${table.bio}) <= 2000`),
     check("users_colour_check", sql`${table.colour} ~ '^#[0-9A-Fa-f]{6}$'`),
+    check("users_feed_discovery_check", sql`${table.feedDiscovery} between -2 and 2`),
+    check("users_feed_freshness_check", sql`${table.feedFreshness} between -2 and 2`),
+    check("users_feed_replies_check", sql`${table.feedReplies} between -2 and 2`),
   ],
 );
 
@@ -935,6 +941,7 @@ export const feedRequests = pgTable("feed_requests", {
   candidateCount: integer("candidate_count").notNull(),
   latencyMs: integer("latency_ms").notNull(),
   timings: jsonb().$type<Record<string, number>>().notNull(),
+  prefs: jsonb().$type<Record<string, unknown>>(),
   createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
 }, (table) => [
   index("feed_requests_user_idx").on(table.userId, table.createdAt.desc()),
@@ -974,6 +981,34 @@ export const feedCounters = pgTable("feed_counters", {
 }, (table) => [
   primaryKey({ columns: [table.day, table.name] }),
   check("feed_counters_name_check", sql`${table.name} ~ '^[a-z_]{1,48}$'`),
+]);
+
+export const feedbackKinds = ["post", "author", "snooze", "topic"] as const;
+
+export const feedFeedback = pgTable("feed_feedback", {
+  id: uuid().defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  kind: text().$type<(typeof feedbackKinds)[number]>().notNull(),
+  postId: uuid("post_id").references(() => posts.id, { onDelete: "cascade" }),
+  authorId: uuid("author_id").references(() => users.id, { onDelete: "cascade" }),
+  topic: text(),
+  direction: smallint().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true, precision: 3 }),
+}, (table) => [
+  uniqueIndex("feed_feedback_post_unique").on(table.userId, table.postId).where(sql`${table.postId} is not null`),
+  uniqueIndex("feed_feedback_author_unique").on(table.userId, table.kind, table.authorId).where(sql`${table.authorId} is not null`),
+  uniqueIndex("feed_feedback_topic_unique").on(table.userId, table.topic).where(sql`${table.topic} is not null`),
+  index("feed_feedback_post_idx").on(table.postId),
+  index("feed_feedback_author_idx").on(table.authorId),
+  index("feed_feedback_expires_idx").on(table.userId, table.expiresAt),
+  check("feed_feedback_kind_check", sql`${table.kind} in (${sqlList(feedbackKinds)})`),
+  check("feed_feedback_direction_check", sql`${table.direction} in (-1, 1) and (${table.kind} <> 'snooze' or ${table.direction} = -1)`),
+  check("feed_feedback_target_check", sql`case ${table.kind}
+    when 'post' then ${table.postId} is not null and ${table.authorId} is null and ${table.topic} is null
+    when 'topic' then ${table.topic} is not null and ${table.postId} is null and ${table.authorId} is null
+    else ${table.authorId} is not null and ${table.postId} is null and ${table.topic} is null end`),
+  check("feed_feedback_topic_check", sql`${table.topic} is null or char_length(${table.topic}) between 1 and 32`),
 ]);
 
 export const deletedAccounts = pgTable("deleted_accounts", {
