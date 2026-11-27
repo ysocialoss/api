@@ -195,7 +195,7 @@ test("users report posts, profiles and messages; staff resolve them", async (t) 
     assert.deepEqual((await (await read(reporter, `/api/posts/states?ids=${target.id}`)).json()).hiddenIds, [target.id]);
     const feed = await (await read(reporter, "/api/posts")).json();
     assert.ok(!feed.posts.some(({ id }) => id === target.id));
-    assert.deepEqual(feed.posts.find(({ id }) => id === quote.id).quote, { state: "unavailable" });
+    assert.deepEqual((await (await read(reporter, `/api/posts/${quote.id}`)).json()).post.quote, { state: "unavailable" });
     assert.equal((await read(reporter, `/api/posts/${reply.id}`)).status, 200);
     assert.equal((await changeVisibility(moderator, false)).status, 204);
     assert.equal((await read(reporter, publicPath)).status, 200);

@@ -47,7 +47,8 @@ export async function recordFeedEvent(tx: Transaction, event: {
     insert into feed_events (user_id, type, post_id, author_id, surface, position, request_id, detail, origin)
     select u.id, ${event.type}, ${event.postId ?? null}::uuid, ${event.authorId ?? null}::uuid,
       ${event.context?.surface ?? null}, ${event.context?.position ?? null}::smallint,
-      ${event.context?.requestId ?? null}::uuid, ${event.detail ?? null}, 'server'
+      (select fr.id from feed_requests fr where fr.id = ${event.context?.requestId ?? null}::uuid and fr.user_id = u.id),
+      ${event.detail ?? null}, 'server'
     from users u where u.id = ${event.userId}::uuid and u.feed_personalize and u.feed_choice_at is not null`);
 }
 
@@ -100,7 +101,9 @@ export async function ingestClientEvents(userId: string, body: unknown, client: 
   })));
   const insert = () => db.execute(sql`
     insert into feed_events (user_id, type, post_id, author_id, surface, position, request_id, session_id, seq, value, detail, client, origin, client_at)
-    select ${userId}::uuid, e.type, e.post_id, p.author_id, e.surface, e.position, e.request_id, ${sessionId}::uuid,
+    select ${userId}::uuid, e.type, e.post_id, p.author_id, e.surface, e.position,
+      case when exists (select 1 from feed_requests fr where fr.id = e.request_id and fr.user_id = ${userId}::uuid) then e.request_id end,
+      ${sessionId}::uuid,
       e.seq, e.value, e.detail, ${client}, 'client',
       case when abs(extract(epoch from (e.at - now()))) <= 86400 then e.at end
     from jsonb_array_elements(${records}::jsonb) with ordinality as item(record, n)

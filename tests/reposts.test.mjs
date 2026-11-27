@@ -52,7 +52,8 @@ test("reposts, friends-only reposts and quotes", async () => {
       alice = await account("rp_alice"),
       bob = await account("rp_bob"),
       carol = await account("rp_carol"),
-      stranger = await account("rp_stranger");
+      stranger = await account("rp_stranger"),
+      watcher = await account("rp_watcher");
     const follow = (a, b) =>
       pool.query("INSERT INTO user_follows (follower_id, following_id) VALUES ($1, $2)", [a.id, b.id]);
     // alice <-> bob and alice <-> author are friends; carol only follows alice.
@@ -61,6 +62,7 @@ test("reposts, friends-only reposts and quotes", async () => {
     await follow(alice, author);
     await follow(author, alice);
     await follow(carol, alice);
+    for (const followed of [author, alice, bob, carol, stranger]) await follow(watcher, followed);
     server = app.listen(0, "127.0.0.1");
     await once(server, "listening");
     const base = `http://127.0.0.1:${server.address().port}`;
@@ -83,7 +85,9 @@ test("reposts, friends-only reposts and quotes", async () => {
     const publish = async (user, content, extra = {}) =>
       (await ok("/api/posts", { user, method: "POST", body: { content, ...extra } }, 201)).post;
     const ids = (page) => page.posts.map((post) => post.id);
-    const feed = (user, query = "") => ok(`/api/posts${query}`, { user });
+    const feed = (user, query = "") => query.startsWith("?topic=")
+      ? ok(`/api/posts${query}`, { user })
+      : ok(`/api/feed/following${query}`, { user: user ?? watcher });
     const notifications = async (user) =>
       (await ok("/api/notifications", { user })).notifications.map((item) => item.kind);
 
@@ -171,7 +175,7 @@ test("reposts, friends-only reposts and quotes", async () => {
     );
     // The repost surfaces `third` at the top for viewers who may see it, and for no one else.
     const labelled = async (user) => {
-      const top = await feed(user);
+      const top = user ? await feed(user) : await ok("/api/posts");
       const context = top.repostedBy[third.id];
       assert.equal(ids(top)[0] === third.id, context !== undefined);
       return context;

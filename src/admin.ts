@@ -6,6 +6,7 @@ import { requireAdminWrite, requireStaff, requireStaffWrite } from "./admin-acce
 import adminActivity from "./admin-activity.ts";
 import adminChangelog from "./admin-changelog.ts";
 import adminSystem from "./admin-system.ts";
+import adminFeed from "./admin-feed.ts";
 import adminReports, { openReportCount } from "./admin-reports.ts";
 import { db } from "./db/index.ts";
 import { authIdentities, githubConnections, moderationActivity, pollVotes, postImageFlags, postImages, posts, userRole, users } from "./db/schema.ts";
@@ -39,6 +40,7 @@ router.use("/safety", adminSafety);
 router.use("/contact", adminContact);
 router.use("/activity", adminActivity);
 router.use("/system", adminSystem);
+router.use("/feed", adminFeed);
 router.use("/changelog", adminChangelog);
 
 router.get("/session", async (req, res) => {

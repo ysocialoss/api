@@ -6,7 +6,7 @@ import { postSelection, repostVisibleSql, serializePost } from "./post-data.ts";
 import { type EveStar, type UserPaint, userSelection } from "./user-data.ts";
 import { attachSelfReplies } from "./self-replies.ts";
 
-type FeedUser = {
+export type FeedUser = {
   id: string;
   handle: string;
   displayName: string;
@@ -15,7 +15,7 @@ type FeedUser = {
   eveStar: EveStar | null;
 };
 type Audience = "public" | "friends";
-type PostRecord = ReturnType<typeof serializePost<Awaited<ReturnType<typeof selectPosts>>[number]>>;
+export type PostRecord = ReturnType<typeof serializePost<Awaited<ReturnType<typeof selectPosts>>[number]>>;
 
 /** Why a post is in a list as a repost: who shared it and how widely. */
 export type RepostContext = {
@@ -34,12 +34,12 @@ function selectPosts(ids: string[], viewerId: string | null) {
     .innerJoin(users, eq(users.id, posts.authorId))
     .where(and(inArray(posts.id, ids), isNull(users.bannedAt), isNull(posts.hiddenAt)));
 }
-async function loadPosts(ids: string[], viewerId: string | null) {
+export async function loadPosts(ids: string[], viewerId: string | null) {
   if (!ids.length) return new Map<string, PostRecord>();
   const rows = await selectPosts(ids, viewerId);
   return new Map(rows.map((row) => [row.id, serializePost(row)]));
 }
-async function loadUsers(ids: string[]) {
+export async function loadUsers(ids: string[]) {
   if (!ids.length) return new Map<string, FeedUser>();
   const rows = await db.select(userSelection).from(users).where(inArray(users.id, ids));
   return new Map(rows.map((row) => [row.id, row]));
@@ -55,20 +55,6 @@ type HomeRow = {
   audience: Audience | null;
   others: number | null;
 };
-/**
- * The home feed. Every top-level post appears once, at its latest activity: its
- * creation, or the newest repost the viewer may see. Reposted replies join the
- * feed the same way. The response carries the posts in order, and the repost
- * that surfaced each one (if any) in `repostedBy`.
- */
-export function homeFeed(
-  viewerId: string | null,
-  cursor: { createdAt: string; id: string } | undefined,
-  limit: number,
-) {
-  return chronologicalFeed(viewerId, cursor, limit, null);
-}
-
 export function followingFeed(
   viewerId: string,
   cursor: { createdAt: string; id: string } | undefined,

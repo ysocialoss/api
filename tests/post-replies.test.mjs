@@ -32,6 +32,7 @@ test("post and reply flows", async (t) => {
     await migrate(database.db, {
       migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)),
     });
+    await pool.query(`INSERT INTO feed_config ("values") VALUES ('{"publicCacheSeconds":0}')`);
     const { env } = await import("../src/config.ts");
     const { hash } = await import("../src/auth/secrets.ts");
     const { rows: [user] } = await pool.query(
@@ -62,6 +63,11 @@ test("post and reply flows", async (t) => {
     }
     async function get(path) {
       const response = await request(path);
+      assert.equal(response.status, 200);
+      return response.json();
+    }
+    async function getPublic(path) {
+      const response = await request(path, "GET", undefined, null);
       assert.equal(response.status, 200);
       return response.json();
     }
@@ -99,7 +105,7 @@ test("post and reply flows", async (t) => {
       await count(sibling.id, 0);
       await count(unrelated.id, 1);
 
-      const feed = await get("/api/posts");
+      const feed = await getPublic("/api/posts");
       assert.equal(feed.posts.find((post) => post.id === root.id).replies, 4);
       const children = await get(`/api/posts/${root.id}/replies`);
       assert.deepEqual(new Set(children.posts.map((post) => post.id)), new Set([comment.id, sibling.id]));
@@ -230,7 +236,7 @@ test("post and reply flows", async (t) => {
       assert.equal(textOnly.gif, null);
       assert.equal((await request(`/api/posts/${textOnly.id}`, "PATCH", { content: "" })).status, 400);
 
-      const feed = await get("/api/posts");
+      const feed = await getPublic("/api/posts");
       assert.deepEqual(feed.posts.find((row) => row.id === post.id).gif, post.gif);
       const thread = await get(`${path}/thread`);
       assert.deepEqual(thread.post.gif, post.gif);
@@ -298,8 +304,8 @@ test("post and reply flows", async (t) => {
         results: [{ id: post.id, poll: { ...savedVote, selectedOption: null } }],
       });
       assert.equal((await request("/api/posts/poll-results?ids=invalid")).status, 400);
-      const feed = await get("/api/posts");
-      assert.deepEqual(feed.posts.find((entry) => entry.id === post.id).poll, savedVote);
+      const feed = await getPublic("/api/posts");
+      assert.deepEqual(feed.posts.find((entry) => entry.id === post.id).poll, { ...savedVote, selectedOption: null });
       const profile = await get("/api/profiles/reply_author");
       assert.deepEqual(profile.posts.find((entry) => entry.id === post.id).poll, savedVote);
 

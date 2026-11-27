@@ -90,11 +90,22 @@ test("legal, data rights, moderation transparency and safety", async (t) => {
       const me = await (await call(alice, "GET", "/auth/me")).json();
       assert.equal(me.termsCurrent, true);
       assert.equal(me.feedChoiceNeeded, false);
-      await query("UPDATE users SET terms_version = 'old' WHERE id = $1", [alice.id]);
-      assert.equal((await (await call(alice, "GET", "/auth/me")).json()).termsCurrent, false);
+      await query("UPDATE users SET terms_version = 'old', age_confirmed_at = NULL WHERE id = $1", [alice.id]);
+      const outdated = await (await call(alice, "GET", "/auth/me")).json();
+      assert.equal(outdated.termsCurrent, false);
+      assert.equal(outdated.user.ageConfirmed, false);
       assert.equal((await call(alice, "POST", "/auth/terms", { version: termsVersion, acceptTerms: true })).status, 400);
+      assert.equal((await query("SELECT terms_version FROM users WHERE id = $1", [alice.id])).rows[0].terms_version, "old");
       assert.equal((await call(alice, "POST", "/auth/terms", { version: termsVersion, acceptTerms: true, ageConfirmed: true })).status, 204);
+      const accepted = await (await call(alice, "GET", "/auth/me")).json();
+      assert.equal(accepted.termsCurrent, true);
+      assert.equal(accepted.user.ageConfirmed, true);
+      const { rows: [{ age_confirmed_at: confirmedAt }] } = await query("SELECT age_confirmed_at FROM users WHERE id = $1", [alice.id]);
+      await query("UPDATE users SET terms_version = 'old' WHERE id = $1", [alice.id]);
+      assert.equal((await call(alice, "POST", "/auth/terms", { version: termsVersion, acceptTerms: true })).status, 204);
       assert.equal((await (await call(alice, "GET", "/auth/me")).json()).termsCurrent, true);
+      const { rows: [{ age_confirmed_at: keptAt }] } = await query("SELECT age_confirmed_at FROM users WHERE id = $1", [alice.id]);
+      assert.equal(keptAt.getTime(), confirmedAt.getTime());
     });
 
     await t.test("the contact form stores messages for admins only and resists abuse", async () => {

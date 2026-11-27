@@ -253,6 +253,14 @@ if (import.meta.main) {
       to_regclass('public.advent_rewards') IS NOT NULL AND
       to_regclass('public.github_contribution_jobs') IS NOT NULL AND
       to_regclass('public.feed_events') IS NOT NULL AND
+      to_regclass('public.feed_requests') IS NOT NULL AND
+      to_regclass('public.feed_candidates') IS NOT NULL AND
+      to_regclass('public.feed_config') IS NOT NULL AND
+      to_regclass('public.feed_models') IS NOT NULL AND
+      to_regclass('public.feed_feature_sets') IS NOT NULL AND
+      to_regclass('public.feed_counters') IS NOT NULL AND
+      to_regclass('public.feed_feedback') IS NOT NULL AND
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'feed_discovery') AND
       to_regclass('public.moderation_decisions') IS NOT NULL AND
       to_regclass('public.moderation_appeals') IS NOT NULL AND
       to_regclass('public.deleted_accounts') IS NOT NULL AND
