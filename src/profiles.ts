@@ -5,6 +5,7 @@ import {
   desc,
   eq,
   inArray,
+  lt,
   isNull,
   isNotNull,
   or,
@@ -18,6 +19,7 @@ import { removeUser, revokeProviderSessions } from "./user-removal.ts";
 import { profileReposts } from "./feed-entries.ts";
 import { AuthError } from "./auth/provider.ts";
 import { postSelection, serializePost } from "./post-data.ts";
+import { readCursor } from "./posts.ts";
 import { banDetailsSelection, githubProfileSelection, postCountSelection, profileCosmeticsSelection, publicProfileSelection, userSelection } from "./user-data.ts";
 import { recordNotification } from "./notification-events.ts";
 import { readFeedContext, recordFeedEvent } from "./ranking/events.ts";
@@ -229,6 +231,112 @@ router.get("/:handle/:list", async (req, res, next) => {
   });
 });
 
+const profilePage = 20;
+type Cursor = ReturnType<typeof readCursor>;
+const encodeCursor = (row: { createdAt: Date; id: string }) =>
+  Buffer.from(JSON.stringify({ createdAt: row.createdAt.toISOString(), id: row.id })).toString("base64url");
+
+async function profilePostPage(profileId: string, viewerId: string | null, replies: boolean, cursor: Cursor) {
+  const rows = await db
+    .select(postSelection(viewerId))
+    .from(posts)
+    .innerJoin(users, eq(users.id, posts.authorId))
+    .where(and(
+      eq(posts.authorId, profileId),
+      replies ? isNotNull(posts.parentId) : isNull(posts.parentId),
+      isNull(posts.hiddenAt),
+      cursor
+        ? or(
+            lt(posts.createdAt, new Date(cursor.createdAt)),
+            and(eq(posts.createdAt, new Date(cursor.createdAt)), lt(posts.id, cursor.id)),
+          )
+        : undefined,
+    ))
+    .orderBy(desc(posts.createdAt), desc(posts.id))
+    .limit(profilePage + 1);
+  const page = rows.slice(0, profilePage);
+  const last = page.at(-1);
+  return { page, nextCursor: rows.length > profilePage && last ? encodeCursor(last) : null };
+}
+
+async function withThreads(replies: Awaited<ReturnType<typeof profilePostPage>>["page"], viewerId: string | null) {
+  const ancestry =
+    replies.length === 0
+      ? []
+      : (
+          await db.execute<{
+            reply_id: string;
+            ancestor_id: string;
+            depth: number;
+          }>(sql`
+    WITH RECURSIVE thread AS (
+      SELECT id AS reply_id, parent_id AS ancestor_id, 0 AS depth
+      FROM posts WHERE id IN (${sql.join(
+        replies.map((reply) => sql`${reply.id}::uuid`),
+        sql`, `,
+      )})
+      UNION ALL
+      SELECT thread.reply_id, parent.parent_id, thread.depth + 1
+      FROM thread JOIN posts parent ON parent.id = thread.ancestor_id
+      WHERE parent.parent_id IS NOT NULL
+    )
+    SELECT reply_id, ancestor_id, depth FROM thread ORDER BY depth DESC
+  `)
+        ).rows;
+  const ancestorIds = [...new Set(ancestry.map((row) => row.ancestor_id))];
+  const ancestors =
+    ancestorIds.length === 0
+      ? []
+      : await db
+          .select(postSelection(viewerId))
+          .from(posts)
+          .innerJoin(users, eq(users.id, posts.authorId))
+          .where(and(inArray(posts.id, ancestorIds), isNull(users.bannedAt), isNull(posts.hiddenAt)));
+  const ancestorsById = new Map(
+    ancestors.map((post) => [post.id, serializePost(post)]),
+  );
+  return replies.map((post) => ({
+    post: serializePost(post),
+    thread: ancestry
+      .filter((row) => row.reply_id === post.id)
+      .flatMap((row) => {
+        const ancestor = ancestorsById.get(row.ancestor_id);
+        return ancestor ? [ancestor] : [];
+      }),
+  }));
+}
+
+const timelineQuery = z.object({ tab: z.enum(["posts", "replies", "reposts"]), cursor: z.string().max(512).optional() });
+
+router.get("/:handle/timeline", async (req, res) => {
+  const handle = handleSchema.safeParse(req.params.handle.toLowerCase());
+  const query = timelineQuery.safeParse(req.query);
+  if (!handle.success) throw new AuthError(404, "profile_not_found");
+  if (!query.success) throw new AuthError(400, "invalid_timeline_query");
+  const cursor = readCursor(query.data.cursor);
+  const [profile] = await db
+    .select({ ...userSelection, bannedAt: users.bannedAt })
+    .from(users)
+    .where(eq(users.id, db.select({ id: userHandles.userId }).from(userHandles).where(eq(userHandles.handle, handle.data))));
+  if (!profile || profile.bannedAt) throw new AuthError(404, "profile_not_found");
+  const viewerId = await readViewerId(req);
+  const blocks = await blockState(db, viewerId, profile.id);
+  const empty = { posts: [], replies: [], reposts: [], repostedBy: {}, nextCursor: null };
+  if (blocks.blocking || blocks.blockedBy) {
+    res.json(empty);
+    return;
+  }
+  if (query.data.tab === "reposts") {
+    const { posts: reposts, repostedBy, nextCursor } = await profileReposts(profile, viewerId, profilePage, cursor);
+    res.json({ ...empty, reposts, repostedBy, nextCursor });
+    return;
+  }
+  const { page, nextCursor } = await profilePostPage(profile.id, viewerId, query.data.tab === "replies", cursor);
+  res.json(query.data.tab === "replies"
+    ? { ...empty, replies: await withThreads(page, viewerId), nextCursor }
+    : { ...empty, posts: page.map(serializePost), nextCursor });
+});
+
 router.get("/:handle", async (req, res) => {
   if (!handleSchema.safeParse(req.params.handle).success) {
     throw new AuthError(404, "profile_not_found");
@@ -280,7 +388,7 @@ router.get("/:handle", async (req, res) => {
     });
     return;
   }
-  const [relationships, recent, replies, { posts: reposts, repostedBy }, [pinned]] = await Promise.all([
+  const [relationships, recent, recentReplies, { posts: reposts, repostedBy, nextCursor: repostsCursor }, [pinned]] = await Promise.all([
     viewerId
       ? db
           .select({
@@ -301,21 +409,9 @@ router.get("/:handle", async (req, res) => {
             ),
           )
       : Promise.resolve([]),
-    db
-      .select(postSelection(viewerId))
-      .from(posts)
-      .innerJoin(users, eq(users.id, posts.authorId))
-      .where(and(eq(posts.authorId, profile.id), isNull(posts.parentId), isNull(posts.hiddenAt)))
-      .orderBy(desc(posts.createdAt), desc(posts.id))
-      .limit(20),
-    db
-      .select(postSelection(viewerId))
-      .from(posts)
-      .innerJoin(users, eq(users.id, posts.authorId))
-      .where(and(eq(posts.authorId, profile.id), isNotNull(posts.parentId), isNull(posts.hiddenAt)))
-      .orderBy(desc(posts.createdAt), desc(posts.id))
-      .limit(20),
-    profileReposts(profile, viewerId),
+    profilePostPage(profile.id, viewerId, false, undefined),
+    profilePostPage(profile.id, viewerId, true, undefined),
+    profileReposts(profile, viewerId, profilePage),
     db
       .select(postSelection(viewerId))
       .from(profilePins)
@@ -323,41 +419,7 @@ router.get("/:handle", async (req, res) => {
       .innerJoin(users, eq(users.id, posts.authorId))
       .where(and(eq(profilePins.userId, profile.id), isNull(posts.hiddenAt))),
   ]);
-  const ancestry =
-    replies.length === 0
-      ? []
-      : (
-          await db.execute<{
-            reply_id: string;
-            ancestor_id: string;
-            depth: number;
-          }>(sql`
-    WITH RECURSIVE thread AS (
-      SELECT id AS reply_id, parent_id AS ancestor_id, 0 AS depth
-      FROM posts WHERE id IN (${sql.join(
-        replies.map((reply) => sql`${reply.id}::uuid`),
-        sql`, `,
-      )})
-      UNION ALL
-      SELECT thread.reply_id, parent.parent_id, thread.depth + 1
-      FROM thread JOIN posts parent ON parent.id = thread.ancestor_id
-      WHERE parent.parent_id IS NOT NULL
-    )
-    SELECT reply_id, ancestor_id, depth FROM thread ORDER BY depth DESC
-  `)
-        ).rows;
-  const ancestorIds = [...new Set(ancestry.map((row) => row.ancestor_id))];
-  const ancestors =
-    ancestorIds.length === 0
-      ? []
-      : await db
-          .select(postSelection(viewerId))
-          .from(posts)
-          .innerJoin(users, eq(users.id, posts.authorId))
-          .where(and(inArray(posts.id, ancestorIds), isNull(users.bannedAt), isNull(posts.hiddenAt)));
-  const ancestorsById = new Map(
-    ancestors.map((post) => [post.id, serializePost(post)]),
-  );
+  const replies = await withThreads(recentReplies.page, viewerId);
   res.json({
     profile: { ...profile, connections: linkedConnections, domains: linkedDomains.map(({ domain }) => domain) },
     pinnedPost: pinned ? serializePost(pinned) : null,
@@ -369,19 +431,12 @@ router.get("/:handle", async (req, res) => {
     isFollowedBy: relationships.some(
       (relationship) => relationship.followingId === viewerId,
     ),
-    posts: recent.map(serializePost),
+    posts: recent.page.map(serializePost),
     // Plain reposts and the person's own quote posts, newest first.
     reposts,
     repostedBy,
-    replies: replies.map((post) => ({
-      post: serializePost(post),
-      thread: ancestry
-        .filter((row) => row.reply_id === post.id)
-        .flatMap((row) => {
-          const ancestor = ancestorsById.get(row.ancestor_id);
-          return ancestor ? [ancestor] : [];
-        }),
-    })),
+    replies,
+    nextCursors: { posts: recent.nextCursor, replies: recentReplies.nextCursor, reposts: repostsCursor },
     serverNow: new Date().toISOString(),
   });
 });
