@@ -135,3 +135,28 @@ test("explanations rank factor kinds by their share of the value", async () => {
   assert.equal(factors[0].strength, "high");
   assert.ok(factors.every((factor) => factor.kind !== "explore"));
 });
+
+test("the defaults match the parameters published on /legal/feed in ysocial_web", () => {
+  assert.deepEqual(defaultConfig.weights, { dwell: 0.5, click: 1, profile: 1, like: 2, comment: 4, share: 3, save: 3, follow: 5, negative: 20 });
+  assert.deepEqual(
+    [defaultConfig.windowHours, defaultConfig.wideWindowHours, defaultConfig.freshnessHalfLifeHours, defaultConfig.freshnessFloor, defaultConfig.seenPenalty],
+    [72, 168, 24, 0.3, 0.3],
+  );
+  assert.deepEqual(
+    [defaultConfig.epsilon, defaultConfig.exploreFrom, defaultConfig.authorGap, defaultConfig.authorMaxPer10],
+    [0.1, 3, 1, 2],
+  );
+  assert.deepEqual(defaultConfig.controls, {
+    freshnessScale: [3, 2, 1, 0.5, 0.25],
+    repliesFactor: [0, 0.5, 1, 1.5, 2],
+    discoveryFactor: [0.3, 0.6, 1, 1.5, 2.2],
+    interestedAuthor: 1.3,
+    interestedTopic: 1.2,
+    notInterestedAuthor: 0.7,
+    notInterestedTopic: 0.8,
+    topicMore: 1.5,
+    topicLess: 0.3,
+    feedbackDays: 60,
+    snoozeDays: 30,
+  });
+});
