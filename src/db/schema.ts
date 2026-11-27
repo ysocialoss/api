@@ -742,7 +742,7 @@ export const reports = pgTable("reports", {
   index("reports_reporter_idx").on(table.reporterId, table.createdAt.desc()),
   uniqueIndex("reports_open_unique").on(table.reporterId, table.targetType, table.targetKey)
     .where(sql`${table.status} = 'open'`),
-  check("reports_reason_check", sql`${table.reason} in ('spam', 'harassment', 'hate', 'violence', 'sexual', 'self_harm', 'misinformation', 'impersonation', 'illegal', 'other')`),
+  check("reports_reason_check", sql`${table.reason} in ('spam', 'harassment', 'hate', 'violence', 'sexual', 'self_harm', 'misinformation', 'impersonation', 'ai_generated', 'illegal', 'other')`),
   check("reports_details_check", sql`char_length(${table.details}) <= 1000`),
   check("reports_note_check", sql`char_length(${table.note}) <= 1000`),
   check("reports_conversation_check", sql`(${table.targetType} = 'message') = (${table.conversationId} is not null)`),

@@ -85,6 +85,7 @@ test("users report posts, profiles and messages; staff resolve them", async (t) 
     assert.equal((await send(reporter, "/api/reports", { reason: "nope", target: { type: "post", id: post.id } })).status, 400);
     assert.equal((await send(reporter, "/api/reports", { reason: "spam", target: { type: "post", id: post.id } }, "http://evil.test")).status, 403);
     assert.equal((await send(reporter, "/api/reports", { reason: "impersonation", target: { type: "user", id: author.id } })).status, 201);
+    assert.ok([200, 201].includes((await send(reporter, "/api/reports", { reason: "ai_generated", target: { type: "post", id: post.id } })).status));
     assert.equal((await send(reporter, "/api/reports", { reason: "harassment", target: { type: "user", id: reporter.id } })).status, 409);
 
     const messages = messageIds.map((id, index) => ({ id, text: `message ${index}` }));

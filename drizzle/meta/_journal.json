@@ -533,6 +533,13 @@
       "when": 1795738091277,
       "tag": "0075_compliance",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1795741691277,
+      "tag": "0076_report_ai_generated",
+      "breakpoints": true
     }
   ]
 }

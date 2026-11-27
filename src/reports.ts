@@ -12,7 +12,7 @@ import { hash, random } from "./auth/secrets.ts";
 import { env } from "./config.ts";
 
 export const reportReasons = [
-  "spam", "harassment", "hate", "violence", "sexual", "self_harm", "misinformation", "impersonation", "illegal", "other",
+  "spam", "harassment", "hate", "violence", "sexual", "self_harm", "misinformation", "impersonation", "ai_generated", "illegal", "other",
 ] as const;
 export const maxContextMessages = 5;
 const windowMs = 10 * 60_000;

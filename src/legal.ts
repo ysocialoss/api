@@ -18,6 +18,7 @@ export const termsClauses = [
   { id: "5.10", title: "Privacy of others" },
   { id: "5.11", title: "Intellectual property" },
   { id: "6.2", title: "Ban evasion and misuse of the service" },
+  { id: "5.12", title: "AI-generated content" },
 ] as const;
 
 export const termsClauseIds = termsClauses.map((clause) => clause.id) as [string, ...string[]];
@@ -33,6 +34,7 @@ export const reasonClause: Record<string, string> = {
   misinformation: "5.8",
   impersonation: "5.9",
 };
+  ai_generated: "5.12",
 
 export const legalCategories = [
   "child_sexual_abuse",
