@@ -86,6 +86,7 @@ export const users = pgTable(
     bannerExternalUrl: text("banner_external_url"),
     colour: text().notNull().default("#808080"),
     changelogSeenAt: timestamp("changelog_seen_at", { withTimezone: true, precision: 3 }),
+    hatSide: text("hat_side"),
     feedPersonalize: boolean("feed_personalize").notNull().default(true),
     feedChoiceAt: timestamp("feed_choice_at", { withTimezone: true, precision: 3 }),
     termsVersion: text("terms_version"),
