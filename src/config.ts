@@ -5,6 +5,9 @@ import { pushConfigSchema } from "./push-config.ts";
 
 config({ path: new URL("../.env", import.meta.url), quiet: true });
 
+const blank = <T extends z.ZodType>(schema: T) =>
+  z.preprocess((value) => (value === "" ? undefined : value), schema.optional());
+
 export const env = z
   .object({
     KLIPY_API_KEY: z.string().optional(),
@@ -51,6 +54,15 @@ export const env = z
         .regex(/^[a-fA-F0-9]{64}$/)
         .optional(),
     ),
+    OPERATOR_NAME: blank(z.string().trim().min(1)),
+    OPERATOR_ADDRESS: blank(z.string().trim().min(1)),
+    OPERATOR_EMAIL: blank(z.email()),
+    PRIVACY_EMAIL: blank(z.email()),
+    ABUSE_EMAIL: blank(z.email()),
+    PHOTODNA_URL: blank(z.url({ protocol: /^https?$/ })),
+    PHOTODNA_KEY: blank(z.string().min(1)),
+    TRUST_PROXY: blank(z.string()),
+    CLIENT_IP_HEADER: blank(z.string().regex(/^[A-Za-z0-9-]+$/)),
     // set on staging so unreleased changelog entries show as "coming soon".
     CHANGELOG_SHOW_UNRELEASED: z.stringbool().default(false),
     NODE_ENV: z

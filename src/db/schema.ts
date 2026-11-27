@@ -20,6 +20,7 @@ import {
   uniqueIndex,
   pgTable,
   primaryKey,
+  smallint,
   text,
   timestamp,
   uuid,
@@ -85,6 +86,12 @@ export const users = pgTable(
     bannerExternalUrl: text("banner_external_url"),
     colour: text().notNull().default("#808080"),
     changelogSeenAt: timestamp("changelog_seen_at", { withTimezone: true, precision: 3 }),
+    feedPersonalize: boolean("feed_personalize").notNull().default(true),
+    feedChoiceAt: timestamp("feed_choice_at", { withTimezone: true, precision: 3 }),
+    termsVersion: text("terms_version"),
+    termsAcceptedAt: timestamp("terms_accepted_at", { withTimezone: true, precision: 3 }),
+    ageConfirmedAt: timestamp("age_confirmed_at", { withTimezone: true, precision: 3 }),
+    lastExportAt: timestamp("last_export_at", { withTimezone: true, precision: 3 }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -360,6 +367,7 @@ export const posts = pgTable(
       table.id.desc(),
     ),
     index("posts_feed_idx").on(table.createdAt.desc(), table.id.desc()),
+    index("posts_author_idx").on(table.authorId, table.createdAt.desc(), table.id.desc()),
     index("posts_content_search_idx").using("gin", sql`to_tsvector('simple', ${table.content})`),
     check(
       "posts_content_check",
@@ -459,6 +467,7 @@ export const postLikes = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },
   (table) => [
     primaryKey({ columns: [table.postId, table.userId] }),
@@ -715,6 +724,16 @@ export const reports = pgTable("reports", {
   resolvedById: uuid("resolved_by_id"),
   resolvedByHandle: text("resolved_by_handle"),
   resolvedAt: timestamp("resolved_at", { withTimezone: true, precision: 3 }),
+  channel: text().$type<"in_app" | "public">().notNull().default("in_app"),
+  legalGround: text("legal_ground"),
+  notifierName: text("notifier_name"),
+  notifierEmail: text("notifier_email"),
+  goodFaithAt: timestamp("good_faith_at", { withTimezone: true, precision: 3 }),
+  statusTokenHash: text("status_token_hash"),
+  reporterSeenAt: timestamp("reporter_seen_at", { withTimezone: true, precision: 3 }),
+  escalatedAt: timestamp("escalated_at", { withTimezone: true, precision: 3 }),
+  escalationAuthority: text("escalation_authority"),
+  escalationRef: text("escalation_ref"),
   createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
 }, (table) => [
   index("reports_queue_idx").on(table.status, table.createdAt.desc(), table.id.desc()),
@@ -723,11 +742,15 @@ export const reports = pgTable("reports", {
   index("reports_reporter_idx").on(table.reporterId, table.createdAt.desc()),
   uniqueIndex("reports_open_unique").on(table.reporterId, table.targetType, table.targetKey)
     .where(sql`${table.status} = 'open'`),
-  check("reports_reason_check", sql`${table.reason} in ('spam', 'harassment', 'hate', 'violence', 'sexual', 'self_harm', 'misinformation', 'impersonation', 'illegal', 'other')`),
+  check("reports_reason_check", sql`${table.reason} in ('spam', 'harassment', 'hate', 'violence', 'sexual', 'self_harm', 'misinformation', 'impersonation', 'ai_generated', 'illegal', 'other')`),
   check("reports_details_check", sql`char_length(${table.details}) <= 1000`),
   check("reports_note_check", sql`char_length(${table.note}) <= 1000`),
   check("reports_conversation_check", sql`(${table.targetType} = 'message') = (${table.conversationId} is not null)`),
   check("reports_resolution_check", sql`(${table.status} = 'open') = (${table.resolvedAt} is null)`),
+  check("reports_channel_check", sql`${table.channel} in ('in_app', 'public')`),
+  check("reports_notifier_check", sql`char_length(${table.notifierName}) <= 120 and char_length(${table.notifierEmail}) <= 254 and char_length(${table.legalGround}) <= 120`),
+  check("reports_escalation_check", sql`char_length(${table.escalationAuthority}) <= 120 and char_length(${table.escalationRef}) <= 200`),
+  uniqueIndex("reports_status_token_idx").on(table.statusTokenHash).where(sql`${table.statusTokenHash} is not null`),
 ]);
 
 export const pushSubscriptions = pgTable(
@@ -815,6 +838,126 @@ export const changelogEntries = pgTable("changelog_entries", {
   check("changelog_entries_body_check", sql`char_length(${table.body}) <= 4000`),
 ]);
 
+export const feedClientEventTypes = [
+  "impression", "dwell", "open", "detail_dwell", "expand", "spoiler", "media_open",
+  "link_open", "profile_open", "voice_play", "share", "topic_open",
+] as const;
+export const feedServerEventTypes = [
+  "like", "unlike", "reply", "quote", "repost", "unrepost", "save", "unsave", "poll_vote",
+  "follow", "unfollow", "block", "report", "more", "less", "snooze", "topic_more", "topic_less",
+] as const;
+export const feedEventTypes = [...feedClientEventTypes, ...feedServerEventTypes] as const;
+export const feedSurfaces = ["for_you", "following", "latest", "thread", "profile", "topic", "search", "saved", "other"] as const;
+const sqlList = (values: readonly string[]) => sql.raw(values.map((value) => `'${value}'`).join(", "));
+
+export const feedEvents = pgTable("feed_events", {
+  id: bigint({ mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  type: text().$type<(typeof feedEventTypes)[number]>().notNull(),
+  postId: uuid("post_id").references(() => posts.id, { onDelete: "cascade" }),
+  authorId: uuid("author_id").references(() => users.id, { onDelete: "cascade" }),
+  surface: text().$type<(typeof feedSurfaces)[number]>(),
+  position: smallint(),
+  requestId: uuid("request_id"),
+  sessionId: uuid("session_id"),
+  seq: integer(),
+  value: integer(),
+  detail: text(),
+  client: text().$type<"mobile" | "desktop">(),
+  origin: text().$type<"client" | "server" | "backfill">().notNull(),
+  clientAt: timestamp("client_at", { withTimezone: true, precision: 3 }),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  index("feed_events_user_idx").on(table.userId, table.createdAt.desc()),
+  index("feed_events_post_idx").on(table.postId, table.type),
+  index("feed_events_author_idx").on(table.authorId).where(sql`${table.authorId} is not null`),
+  index("feed_events_created_idx").using("brin", table.createdAt),
+  uniqueIndex("feed_events_session_seq_idx").on(table.sessionId, table.seq).where(sql`${table.sessionId} is not null`),
+  check("feed_events_type_check", sql`${table.type} in (${sqlList(feedEventTypes)})`),
+  check("feed_events_surface_check", sql`${table.surface} is null or ${table.surface} in (${sqlList(feedSurfaces)})`),
+  check("feed_events_client_check", sql`${table.client} is null or ${table.client} in ('mobile', 'desktop')`),
+  check("feed_events_origin_check", sql`${table.origin} in ('client', 'server', 'backfill')`),
+  check("feed_events_detail_check", sql`${table.detail} is null or char_length(${table.detail}) <= 253`),
+  check("feed_events_session_check", sql`(${table.sessionId} is null) = (${table.seq} is null)`),
+]);
+
+export const deletedAccounts = pgTable("deleted_accounts", {
+  userId: uuid("user_id").primaryKey(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+});
+
+export const moderationActions = [
+  "remove_post", "hide_post", "remove_media", "edit_post", "clear_profile", "edit_profile", "ban", "remove_account", "remove_message",
+] as const;
+
+export const moderationDecisions = pgTable("moderation_decisions", {
+  id: uuid().defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  action: text().$type<(typeof moderationActions)[number]>().notNull(),
+  targetType: text("target_type").$type<"post" | "user" | "message">().notNull(),
+  targetKey: uuid("target_key"),
+  excerpt: text().notNull().default(""),
+  groundType: text("ground_type").$type<"illegal" | "terms">().notNull(),
+  groundRef: text("ground_ref").notNull(),
+  facts: text().notNull(),
+  automatedDetection: boolean("automated_detection").notNull().default(false),
+  automatedDecision: boolean("automated_decision").notNull().default(false),
+  reportId: uuid("report_id").references(() => reports.id, { onDelete: "set null" }),
+  decidedById: uuid("decided_by_id"),
+  decidedByHandle: text("decided_by_handle"),
+  seenAt: timestamp("seen_at", { withTimezone: true, precision: 3 }),
+  reversedAt: timestamp("reversed_at", { withTimezone: true, precision: 3 }),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  index("moderation_decisions_user_idx").on(table.userId, table.createdAt.desc()),
+  check("moderation_decisions_action_check", sql`${table.action} in (${sql.raw(moderationActions.map((value) => `'${value}'`).join(", "))})`),
+  check("moderation_decisions_target_check", sql`${table.targetType} in ('post', 'user', 'message')`),
+  check("moderation_decisions_ground_check", sql`${table.groundType} in ('illegal', 'terms') and char_length(${table.groundRef}) between 1 and 120`),
+  check("moderation_decisions_text_check", sql`char_length(${table.facts}) between 1 and 2000 and char_length(${table.excerpt}) <= 300`),
+]);
+
+export const moderationAppeals = pgTable("moderation_appeals", {
+  id: uuid().defaultRandom().primaryKey(),
+  decisionId: uuid("decision_id").notNull().unique("moderation_appeals_decision_unique").references(() => moderationDecisions.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  text: text().notNull(),
+  status: text().$type<"open" | "upheld" | "reversed">().notNull().default("open"),
+  staffNote: text("staff_note"),
+  resolvedById: uuid("resolved_by_id"),
+  resolvedByHandle: text("resolved_by_handle"),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true, precision: 3 }),
+  seenAt: timestamp("seen_at", { withTimezone: true, precision: 3 }),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  index("moderation_appeals_queue_idx").on(table.status, table.createdAt),
+  check("moderation_appeals_status_check", sql`${table.status} in ('open', 'upheld', 'reversed')`),
+  check("moderation_appeals_text_check", sql`char_length(${table.text}) between 1 and 2000 and char_length(${table.staffNote}) <= 2000`),
+  check("moderation_appeals_resolution_check", sql`(${table.status} = 'open') = (${table.resolvedAt} is null)`),
+]);
+
+export const csamIncidents = pgTable("csam_incidents", {
+  id: uuid().defaultRandom().primaryKey(),
+  userId: uuid("user_id"),
+  handle: text().notNull(),
+  surface: text().$type<"post_image" | "avatar" | "banner" | "flag">().notNull(),
+  provider: text().notNull(),
+  matchId: text("match_id"),
+  sha256: text().notNull(),
+  mime: text().notNull(),
+  size: integer().notNull(),
+  ip: text(),
+  hold: boolean().notNull().default(false),
+  reportedBkaAt: timestamp("reported_bka_at", { withTimezone: true, precision: 3 }),
+  bkaRef: text("bka_ref"),
+  reportedNcmecAt: timestamp("reported_ncmec_at", { withTimezone: true, precision: 3 }),
+  ncmecRef: text("ncmec_ref"),
+  note: text(),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  index("csam_incidents_created_idx").on(table.createdAt.desc()),
+  check("csam_incidents_surface_check", sql`${table.surface} in ('post_image', 'avatar', 'banner', 'flag')`),
+]);
+
 export const adventDoors = pgTable("advent_doors", {
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   year: integer().notNull(),
@@ -834,4 +977,17 @@ export const adventRewards = pgTable("advent_rewards", {
 }, (table) => [
   primaryKey({ columns: [table.userId, table.year, table.day] }),
   check("advent_rewards_day_check", sql`${table.day} in (7, 14, 24)`),
+]);
+
+export const contactMessages = pgTable("contact_messages", {
+  id: uuid().defaultRandom().primaryKey(),
+  name: text(),
+  email: text(),
+  message: text().notNull(),
+  handledAt: timestamp("handled_at", { withTimezone: true, precision: 3 }),
+  handledByHandle: text("handled_by_handle"),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+}, (table) => [
+  index("contact_messages_queue_idx").on(table.handledAt, table.createdAt),
+  check("contact_messages_text_check", sql`char_length(${table.message}) between 10 and 2000 and char_length(${table.name}) <= 100 and char_length(${table.email}) <= 254`),
 ]);

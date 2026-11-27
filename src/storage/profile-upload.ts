@@ -7,6 +7,7 @@ import { bannerCropSchema } from "./banner-crop.ts";
 import { bannerScreeningImage, bannerUploadLimit, normalizeBanner } from "./banner-image.ts";
 import { stageMediaUpload } from "./media-lifecycle.ts";
 import { requireAvatarStorage } from "./r2.ts";
+import { scanUpload } from "../safety/hash-match.ts";
 
 export async function stageAvatarUpload(req: Request, res: Response, uploaderId: string) {
   requireAvatarStorage();
@@ -20,6 +21,7 @@ export async function stageAvatarUpload(req: Request, res: Response, uploaderId:
   });
   const body: unknown = req.body;
   if (!Buffer.isBuffer(body)) throw new AuthError(400, "invalid_avatar");
+  await scanUpload({ bytes: body, mime: "image/png", surface: "avatar", uploaderId, ip: req.ip });
   return withImageModeration(async () => {
     const image = await normalizeAvatar(body);
     await screenImage({ data: image, uploaderId });
@@ -56,6 +58,7 @@ export async function stageBannerUpload(req: Request, res: Response, uploaderId:
   } catch {
     throw new AuthError(400, "invalid_banner_crop");
   }
+  await scanUpload({ bytes: body, mime: req.get("content-type") ?? "", surface: "banner", uploaderId, ip: req.ip });
   const image = await normalizeBanner(body);
   if (!image.animated) {
     await withImageModeration(async () => {

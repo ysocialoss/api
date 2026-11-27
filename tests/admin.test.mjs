@@ -107,9 +107,16 @@ test("staff sessions can read admin data and role changes take effect on the nex
         Origin: env.APP_ORIGIN,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ handle, pronouns }),
+      body: JSON.stringify({ handle, pronouns, acceptTerms: true, ageConfirmed: true }),
     });
     const regularToken = await onboardingSession("different");
+    const withoutTerms = await fetch(base + "/auth/profile", {
+      method: "POST",
+      headers: { Cookie: `session=${regularToken}`, Origin: env.APP_ORIGIN, "Content-Type": "application/json" },
+      body: JSON.stringify({ handle: "ytest" }),
+    });
+    assert.equal(withoutTerms.status, 400);
+    assert.equal((await withoutTerms.json()).error, "terms_required");
     const regular = await onboard(regularToken);
     assert.equal(regular.status, 201);
     const { user: regularUser } = await regular.json();
@@ -333,7 +340,7 @@ test("staff sessions can read admin data and role changes take effect on the nex
       fetch(base + "/api/admin/users/" + id + "/profile", {
         method: "PATCH",
         headers: { ...cookie, Origin: env.ADMIN_ORIGIN, "Content-Type": "application/json" },
-        body: JSON.stringify({ action, value }),
+        body: JSON.stringify({ action, value, ground: { type: "terms", ref: "5.7", facts: "Test decision" } }),
       });
     const listed = await list("q=staff_test");
     assert.equal(listed.users[0].bio, "Sample bio");
@@ -456,7 +463,8 @@ test("staff sessions can read admin data and role changes take effect on the nex
     assert.equal(detailData.voiceUrl, voice.url);
     const detach = (id, kind, cookie = staffHeaders) => fetch(contentPath + "/" + id + "/attachments/" + kind, {
       method: "DELETE",
-      headers: { ...cookie, Origin: env.ADMIN_ORIGIN },
+      headers: { ...cookie, Origin: env.ADMIN_ORIGIN, "Content-Type": "application/json" },
+      body: JSON.stringify({ ground: { type: "terms", ref: "5.7", facts: "Test decision" } }),
     });
     const { rows: [gifOnly] } = await database.pool.query(
       "INSERT INTO posts (author_id, parent_id, content, gif) VALUES ($1, $2, '', $3) RETURNING id",
@@ -480,7 +488,8 @@ test("staff sessions can read admin data and role changes take effect on the nex
     assert.equal((await database.pool.query("SELECT 1 FROM poll_votes WHERE post_id = $1", [reply.id])).rowCount, 0);
     const remove = (cookie, origin = env.ADMIN_ORIGIN) => fetch(contentPath + "/" + quote.id, {
       method: "DELETE",
-      headers: { ...cookie, Origin: origin },
+      headers: { ...cookie, Origin: origin, "Content-Type": "application/json" },
+      body: JSON.stringify({ ground: { type: "terms", ref: "5.7", facts: "Test decision" } }),
     });
     assert.equal((await remove(headers)).status, 403);
     assert.equal((await remove(staffHeaders, "https://other.invalid")).status, 403);
@@ -581,7 +590,7 @@ test("staff sessions can read admin data and role changes take effect on the nex
       fetch(base + "/api/admin/users/" + id + "/account", {
         method: "PATCH",
         headers: { ...cookie, Origin: env.ADMIN_ORIGIN, "Content-Type": "application/json" },
-        body: JSON.stringify(action === "ban" ? { action, reason: "Spam" } : { action }),
+        body: JSON.stringify(action === "ban" ? { action, reason: "Spam", ground: { type: "terms", ref: "5.7", facts: "Test decision" } } : { action }),
       });
     const { rows: [applicantPost] } = await database.pool.query(
       "INSERT INTO posts (author_id, content) VALUES ($1, 'Account removal test') RETURNING id", [applicant.id],

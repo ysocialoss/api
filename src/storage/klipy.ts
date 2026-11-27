@@ -3,7 +3,7 @@ import { z } from "zod";
 import { env } from "../config.ts";
 import { AuthError } from "../auth/provider.ts";
 import { bannerUploadLimit } from "./banner-image.ts";
-const mediaUrl = z.url().refine((value) => {
+export const klipyMediaUrl = z.url().refine((value) => {
   const url = new URL(value);
   return (
     url.protocol === "https:" &&
@@ -16,13 +16,13 @@ const mediaUrl = z.url().refine((value) => {
   );
 });
 const rendition = z.object({
-  url: mediaUrl,
+  url: klipyMediaUrl,
   size: z.number().optional(),
   width: z.number().positive().optional(),
   height: z.number().positive().optional(),
 });
 const gifSelectionSchema = z.object({
-  url: mediaUrl,
+  url: klipyMediaUrl,
   title: z.string().default("GIF"),
   userId: z.string(),
   expires: z.number(),

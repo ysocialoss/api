@@ -98,6 +98,8 @@ When you add an API error string, add it there too, in the matching range.
 | YS-4007 | `invalid_push_subscription` | The push subscription is malformed. |
 | YS-4008 | `notification_not_found` | The notification does not exist. |
 | YS-4009 | `push_subscription_not_found` | The push subscription does not exist. |
+| YS-4010 | `invalid_feed_events` | A batch of feed activity events failed validation. |
+| YS-4011 | `invalid_feed_preferences` | The feed preferences update is not valid. |
 
 ## 5xxx: Media
 

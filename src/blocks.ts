@@ -5,6 +5,7 @@ import { AuthError } from "./auth/provider.ts";
 import { requireSessionUser, requireUser } from "./auth/request.ts";
 import { db } from "./db/index.ts";
 import { notifications, userBlocks, userFollows, users } from "./db/schema.ts";
+import { readFeedContext, recordFeedEvent } from "./ranking/events.ts";
 import { userSelection } from "./user-data.ts";
 
 type Database = Pick<typeof db, "select">;
@@ -73,7 +74,10 @@ async function setBlock(req: Parameters<typeof requireUser>[0], blocked: boolean
       await tx.delete(userBlocks).where(and(eq(userBlocks.blockerId, viewer.id), eq(userBlocks.blockedId, target.id)));
       return;
     }
-    await tx.insert(userBlocks).values({ blockerId: viewer.id, blockedId: target.id }).onConflictDoNothing();
+    const [inserted] = await tx.insert(userBlocks).values({ blockerId: viewer.id, blockedId: target.id }).onConflictDoNothing()
+      .returning({ id: userBlocks.blockedId });
+    if (inserted)
+      await recordFeedEvent(tx, { userId: viewer.id, type: "block", authorId: target.id, context: readFeedContext(req) });
     await tx.delete(userFollows).where(or(
       and(eq(userFollows.followerId, viewer.id), eq(userFollows.followingId, target.id)),
       and(eq(userFollows.followerId, target.id), eq(userFollows.followingId, viewer.id)),

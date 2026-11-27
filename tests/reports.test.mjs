@@ -69,10 +69,11 @@ test("users report posts, profiles and messages; staff resolve them", async (t) 
     server = app.listen(0, "127.0.0.1");
     await once(server, "listening");
     const base = `http://127.0.0.1:${server.address().port}`;
+    const ground = { type: "terms", ref: "5.7", facts: "Test decision" };
     const send = (who, path, body, origin = "http://localhost:3000") => fetch(base + path, {
       method: "POST",
       headers: { Cookie: who.cookie, Origin: origin, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(path.endsWith("/resolve") && body?.decision === "resolve" && !("ground" in body) ? { ...body, ground } : body),
     });
     const read = (who, path) => fetch(base + path, { headers: { Cookie: who.cookie } });
 
@@ -84,6 +85,7 @@ test("users report posts, profiles and messages; staff resolve them", async (t) 
     assert.equal((await send(reporter, "/api/reports", { reason: "nope", target: { type: "post", id: post.id } })).status, 400);
     assert.equal((await send(reporter, "/api/reports", { reason: "spam", target: { type: "post", id: post.id } }, "http://evil.test")).status, 403);
     assert.equal((await send(reporter, "/api/reports", { reason: "impersonation", target: { type: "user", id: author.id } })).status, 201);
+    assert.ok([200, 201].includes((await send(reporter, "/api/reports", { reason: "ai_generated", target: { type: "post", id: post.id } })).status));
     assert.equal((await send(reporter, "/api/reports", { reason: "harassment", target: { type: "user", id: reporter.id } })).status, 409);
 
     const messages = messageIds.map((id, index) => ({ id, text: `message ${index}` }));
@@ -159,13 +161,14 @@ test("users report posts, profiles and messages; staff resolve them", async (t) 
     );
     const changeVisibility = (who, hidden, origin = adminOrigin) => fetch(base + `/api/admin/posts/${target.id}/visibility`, {
       method: "PATCH", headers: { Cookie: who.cookie, Origin: origin, "Content-Type": "application/json" },
-      body: JSON.stringify({ hidden }),
+      body: JSON.stringify(hidden ? { hidden, ground } : { hidden }),
     });
     const publicPath = `/api/posts/${target.id}`;
     const staffPath = `/api/admin/post/${target.id}`;
     const reportTarget = (who) => send(who, "/api/reports", { reason: "spam", target: { type: "post", id: target.id } });
     const deleteDirectly = () => fetch(base + `/api/admin/posts/${target.id}`, {
-      method: "DELETE", headers: { Cookie: moderator.cookie, Origin: adminOrigin },
+      method: "DELETE", headers: { Cookie: moderator.cookie, Origin: adminOrigin, "Content-Type": "application/json" },
+      body: JSON.stringify({ ground }),
     });
     assert.equal((await deleteDirectly()).status, 403);
     assert.equal((await reportTarget(moderator)).status, 201);

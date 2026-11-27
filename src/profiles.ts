@@ -1,4 +1,4 @@
-import { readViewerId, requireUser } from "./auth/request.ts";
+import { readViewerId, requireOrigin, requireSessionUser, requireUser } from "./auth/request.ts";
 import { Router, type Request } from "express";
 import {
   and,
@@ -14,12 +14,13 @@ import { z } from "zod";
 import { db } from "./db/index.ts";
 import { authIdentities, connections, githubConnections, posts, profilePins, userDomains, users, userFollows, userHandles } from "./db/schema.ts";
 import { publishAccountChange } from "./live-events.ts";
-import { removeUser } from "./user-removal.ts";
+import { removeUser, revokeProviderSessions } from "./user-removal.ts";
 import { profileReposts } from "./feed-entries.ts";
 import { AuthError } from "./auth/provider.ts";
 import { postSelection, serializePost } from "./post-data.ts";
 import { banDetailsSelection, githubProfileSelection, postCountSelection, profileCosmeticsSelection, publicProfileSelection, userSelection } from "./user-data.ts";
 import { recordNotification } from "./notification-events.ts";
+import { readFeedContext, recordFeedEvent } from "./ranking/events.ts";
 import { blockState, notBlockedSql, requireNotBlocked } from "./blocks.ts";
 import { badgeIconDirectory, isBadgeIcon } from "./profile-badges.ts";
 import { displayNameSchema } from "./display-name.ts";
@@ -92,10 +93,11 @@ router.patch("/me", async (req, res) => {
   res.json(profile);
 });
 router.delete("/me", async (req, res) => {
-  const viewer = await requireUser(req);
+  requireOrigin(req);
+  const viewer = await requireSessionUser(req);
   const input = z.strictObject({ handle: handleSchema }).safeParse(req.body);
   if (!input.success) throw new AuthError(400, "invalid_confirmation");
-  await db.transaction(async (tx) => {
+  const removed = await db.transaction(async (tx) => {
     await tx.select({ id: authIdentities.id }).from(authIdentities)
       .where(eq(authIdentities.userId, viewer.id)).for("update");
     const [target] = await tx
@@ -112,9 +114,11 @@ router.delete("/me", async (req, res) => {
     if (!target) return;
     if (target.handle !== input.data.handle) throw new AuthError(400, "invalid_confirmation");
     if (target.role === "admin") throw new AuthError(409, "protected_account");
-    await removeUser(tx, target);
+    const result = await removeUser(tx, target);
     await publishAccountChange(tx, target.id);
+    return result;
   });
+  if (removed) await revokeProviderSessions(removed.revokeTokens);
   res.sendStatus(204);
 });
 router.get("/:handle/availability", async (req, res) => {
@@ -412,7 +416,8 @@ async function setFollow(req: Request, follow: boolean) {
         .values({ followerId: viewer.id, followingId: target.id })
         .onConflictDoNothing()
         .returning();
-      if (inserted)
+      if (inserted) {
+        await recordFeedEvent(tx, { userId: viewer.id, type: "follow", authorId: target.id, context: readFeedContext(req) });
         await recordNotification(tx, {
           recipientId: target.id,
           actorId: viewer.id,
@@ -420,15 +425,19 @@ async function setFollow(req: Request, follow: boolean) {
           postId: null,
           subject: target.id,
         });
+      }
     } else {
-      await tx
+      const [removed] = await tx
         .delete(userFollows)
         .where(
           and(
             eq(userFollows.followerId, viewer.id),
             eq(userFollows.followingId, target.id),
           ),
-        );
+        )
+        .returning({ id: userFollows.followingId });
+      if (removed)
+        await recordFeedEvent(tx, { userId: viewer.id, type: "unfollow", authorId: target.id, context: readFeedContext(req) });
     }
     const [count] = await tx
       .select({ followerCount: sql<number>`count(*)::int` })

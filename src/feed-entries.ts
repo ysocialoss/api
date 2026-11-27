@@ -54,12 +54,32 @@ type HomeRow = {
  * feed the same way. The response carries the posts in order, and the repost
  * that surfaced each one (if any) in `repostedBy`.
  */
-export async function homeFeed(
+export function homeFeed(
   viewerId: string | null,
   cursor: { createdAt: string; id: string } | undefined,
   limit: number,
 ) {
+  return chronologicalFeed(viewerId, cursor, limit, null);
+}
+
+export function followingFeed(
+  viewerId: string,
+  cursor: { createdAt: string; id: string } | undefined,
+  limit: number,
+) {
+  return chronologicalFeed(viewerId, cursor, limit, viewerId);
+}
+
+async function chronologicalFeed(
+  viewerId: string | null,
+  cursor: { createdAt: string; id: string } | undefined,
+  limit: number,
+  followerId: string | null,
+) {
   const activity = sql`coalesce(lr.created_at, p.created_at)`;
+  const network = followerId
+    ? sql`(select ${followerId}::uuid union select following_id from user_follows where follower_id = ${followerId})`
+    : null;
   const { rows } = await db.execute<HomeRow>(sql`
     select p.id as post_id, ${activity} as at, ${epochMs(activity)} as at_ms, lr.user_id as reposter_id,
       lr.audience as audience, lr.n::int as others
@@ -69,11 +89,20 @@ export async function homeFeed(
       select r.user_id, r.created_at, r.audience, count(*) over () - 1 as n
       from post_reposts r join users reposter on reposter.id = r.user_id
       where r.post_id = p.id and reposter.banned_at is null and ${repostVisibleSql(viewerId)}
+        ${network ? sql`and r.user_id in ${network}` : sql``}
         ${viewerId ? sql`and ${notBlockedSql(viewerId, sql`r.user_id`)}` : sql``}
       order by r.created_at desc, r.user_id desc
       limit 1
     ) lr on true
-    where p.hidden_at is null and (p.parent_id is null or lr.user_id is not null)
+    where p.hidden_at is null
+      ${
+        network
+          ? sql`and p.id in (
+              select id from posts where parent_id is null and author_id in ${network}
+              union select post_id from post_reposts where user_id in ${network})
+            and ((p.parent_id is null and p.author_id in ${network}) or lr.user_id is not null)`
+          : sql`and (p.parent_id is null or lr.user_id is not null)`
+      }
       ${viewerId ? sql`and ${notBlockedSql(viewerId, sql`p.author_id`)}` : sql``}
       ${
         cursor

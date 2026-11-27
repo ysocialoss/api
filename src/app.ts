@@ -29,6 +29,15 @@ import express, { type ErrorRequestHandler } from "express";
 import pg from "pg";
 import admin from "./admin.ts";
 import reports from "./reports.ts";
+import feed from "./feed.ts";
+import legal from "./legal.ts";
+import contact from "./contact.ts";
+import ipaddr from "ipaddr.js";
+import { isIP } from "node:net";
+import dataExport from "./data-export.ts";
+import gifMedia from "./gif-media.ts";
+import { userModeration } from "./moderation.ts";
+import { startRetention } from "./retention.ts";
 import blocks from "./blocks.ts";
 import auth from "./auth.ts";
 import { pool } from "./db/index.ts";
@@ -36,6 +45,27 @@ import { connectWithRetry } from "./db/connect.ts";
 import { env } from "./config.ts";
 
 export const app = express();
+if (env.TRUST_PROXY) {
+  const hops = Number(env.TRUST_PROXY);
+  app.set("trust proxy", Number.isInteger(hops) ? hops : env.TRUST_PROXY.split(",").map((value) => value.trim()).filter(Boolean));
+}
+
+if (env.CLIENT_IP_HEADER) {
+  const header = env.CLIENT_IP_HEADER;
+  const trustedRanges = new Set(["private", "loopback", "uniqueLocal", "linkLocal", "carrierGradeNat"]);
+  const trustedPeer = (address: string | undefined) => {
+    try {
+      return address !== undefined && trustedRanges.has(ipaddr.process(address).range());
+    } catch {
+      return false;
+    }
+  };
+  app.use((req, _res, next) => {
+    const value = req.get(header)?.trim();
+    if (value && isIP(value) && trustedPeer(req.socket.remoteAddress)) Object.defineProperty(req, "ip", { value, configurable: true });
+    next();
+  });
+}
 
 let startupReady = !import.meta.main;
 app.use((_req, res, next) => {
@@ -57,11 +87,18 @@ app.post("/webhooks/cns", (_req, res) => {
   res.status(503).json({ error: "webhooks_not_configured" });
 });
 app.use("/api/reports", express.json({ limit: "64kb" }), reports);
+app.use("/api/feed/events", express.json({ limit: "64kb" }));
 app.use(express.json({ limit: "16kb" }));
 app.use("/auth", auth);
 app.use("/api/admin", admin);
 app.use("/api/blocks", blocks);
 app.use("/api/posts", posts);
+app.use("/api/feed", feed);
+app.use("/api/legal", legal);
+app.use("/api/contact", contact);
+app.use("/api/me", dataExport);
+app.use("/api/gifs", gifMedia);
+app.use("/api/moderation", userModeration);
 app.use("/api/post-images", postImages);
 app.use("/api/og", og);
 app.use("/api/live", live);
@@ -127,6 +164,7 @@ if (import.meta.main) {
   let stopPushDelivery = () => {};
   let stopLiveEvents = () => {};
   let stopGithubRefresh = () => {};
+  let stopRetention = () => {};
   const server = app.listen(env.PORT, () =>
     console.info(`API listening on port ${env.PORT}`),
   );
@@ -146,6 +184,7 @@ if (import.meta.main) {
       stopLiveEvents();
       dmSocket.stop();
       stopGithubRefresh();
+      stopRetention();
       setTimeout(() => {
         server.close(() => { void pool.end(); });
         server.closeIdleConnections();
@@ -207,9 +246,19 @@ if (import.meta.main) {
       to_regclass('public.profile_pins') IS NOT NULL AND
       to_regclass('public.github_connections') IS NOT NULL AND
       to_regclass('public.github_link_attempts') IS NOT NULL AND
+      to_regclass('public.contact_messages') IS NOT NULL AND
       to_regclass('public.advent_doors') IS NOT NULL AND
       to_regclass('public.advent_rewards') IS NOT NULL AND
-      to_regclass('public.github_contribution_jobs') IS NOT NULL AS ready`);
+      to_regclass('public.github_contribution_jobs') IS NOT NULL AND
+      to_regclass('public.feed_events') IS NOT NULL AND
+      to_regclass('public.moderation_decisions') IS NOT NULL AND
+      to_regclass('public.moderation_appeals') IS NOT NULL AND
+      to_regclass('public.deleted_accounts') IS NOT NULL AND
+      to_regclass('public.csam_incidents') IS NOT NULL AND
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'terms_version') AND
+      to_regclass('public.posts_author_idx') IS NOT NULL AND
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'feed_personalize') AND
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'post_likes' AND column_name = 'created_at') AS ready`);
     if (!schema.rows[0]?.ready) {
       throw new Error(
         "Database schema is missing. Run pnpm db:migrate in api/ before starting the API.",
@@ -223,6 +272,7 @@ if (import.meta.main) {
     stopPushDelivery = startPushDelivery();
     stopLiveEvents = startLiveEvents(dmSocket);
     stopGithubRefresh = startGithubRefresh();
+    stopRetention = startRetention();
     startupReady = true;
   } catch (error) {
     if (!shutdown.signal.aborted) {
