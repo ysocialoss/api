@@ -164,6 +164,17 @@ async function rank(options: { viewerId: string | null; mode: FeedMode; chainId:
   return { requestId, stored: placed.length, candidateCount: candidates.length, started, timings, config };
 }
 
+let publicRanking: ReturnType<typeof rank> | null = null;
+
+async function sharedPublicRank() {
+  if (publicRanking) return { ranked: await publicRanking, owner: false };
+  publicRanking = rank({ viewerId: null, mode: "public", chainId: randomUUID(), continuation: false })
+    .finally(() => {
+      publicRanking = null;
+    });
+  return { ranked: await publicRanking, owner: true };
+}
+
 async function finishTimings(requestId: string, started: number, timings: Record<string, number>, hydrateMs: number) {
   const all = { ...timings, hydrate: hydrateMs };
   await db.update(feedRequests).set({ timings: all, latencyMs: Math.round(performance.now() - started) })
@@ -263,6 +274,7 @@ async function rankedPage(viewerId: string | null, mode: FeedMode, rawCursor: un
   let requestId: string;
   let offset = 0;
   let fresh: Awaited<ReturnType<typeof rank>> | null = null;
+  let ownsTimings = true;
   let candidateCount: number;
   if (cursor) {
     const [request] = await db.select().from(feedRequests).where(eq(feedRequests.id, cursor.r)).limit(1);
@@ -283,7 +295,9 @@ async function rankedPage(viewerId: string | null, mode: FeedMode, rawCursor: un
       requestId = fresh.requestId;
       candidateCount = fresh.candidateCount;
     } else if (mode === "public" && stale) {
-      fresh = await rank({ viewerId: null, mode, chainId: randomUUID(), continuation: false, signal });
+      const shared = await sharedPublicRank();
+      fresh = shared.ranked;
+      ownsTimings = shared.owner;
       requestId = fresh.requestId;
       candidateCount = fresh.candidateCount;
     } else {
@@ -298,7 +312,9 @@ async function rankedPage(viewerId: string | null, mode: FeedMode, rawCursor: un
       candidateCount = cachedRequest.candidateCount;
     } else {
       await bumpCounter("public_cache_miss");
-      fresh = await rank({ viewerId: null, mode, chainId: randomUUID(), continuation: false, signal });
+      const shared = await sharedPublicRank();
+      fresh = shared.ranked;
+      ownsTimings = shared.owner;
       requestId = fresh.requestId;
       candidateCount = fresh.candidateCount;
     }
@@ -310,7 +326,7 @@ async function rankedPage(viewerId: string | null, mode: FeedMode, rawCursor: un
   const hydrateStarted = performance.now();
   const items = await serve(requestId, offset, pageSize, mode, signal);
   const page = await hydrate(items, requestId, viewerId, mode);
-  if (fresh) await finishTimings(requestId, fresh.started, fresh.timings, Math.round(performance.now() - hydrateStarted));
+  if (fresh && ownsTimings) await finishTimings(requestId, fresh.started, fresh.timings, Math.round(performance.now() - hydrateStarted));
   const stored = fresh ? fresh.stored : await storedCount(requestId);
   const nextOffset = offset + items.length;
   const more = nextOffset < stored || (mode === "personal" && candidateCount > stored && items.length > 0);

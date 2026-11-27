@@ -181,6 +181,14 @@ test("ranked feed: modes, paging, exclusions, shadow logging, fallback and admin
       await query("DELETE FROM user_blocks WHERE blocker_id = $1", [authors[1].id]);
     });
 
+    await t.test("concurrent anonymous misses share one public ranking", async () => {
+      await query("DELETE FROM feed_requests WHERE mode = 'public'");
+      const pages = await Promise.all([forYou(null), forYou(null), forYou(null)].map(async (response) => json(await response)));
+      assert.equal(new Set(pages.map((page) => page.requestId)).size, 1);
+      const { rows: [count] } = await query("SELECT count(*)::int AS n FROM feed_requests WHERE mode = 'public'");
+      assert.equal(count.n, 1);
+    });
+
     await t.test("Following is shadow-logged for opted-in users only, and events keep owned request ids", async () => {
       const page = await json(await call(viewer, "GET", "/api/feed/following"));
       assert.ok(page.requestId);
