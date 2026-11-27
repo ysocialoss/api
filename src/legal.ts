@@ -3,7 +3,7 @@ import { env } from "./config.ts";
 import { AuthError } from "./auth/provider.ts";
 import { hashMatcher } from "./safety/hash-match.ts";
 
-export const termsVersion = "2026-12-01";
+export const termsVersion = "2026-11-27";
 
 export const termsClauses = [
   { id: "3.1", title: "Minimum age" },
