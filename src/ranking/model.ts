@@ -47,7 +47,7 @@ export function predict(model: Model, features: ArrayLike<number>): number[] {
   });
 }
 
-function readHeads(value: unknown): Record<Head, HeadWeights> | null {
+export function readHeads(value: unknown): Record<Head, HeadWeights> | null {
   if (typeof value !== "object" || value === null) return null;
   const heads = value as Record<string, unknown>;
   const result = {} as Record<Head, HeadWeights>;

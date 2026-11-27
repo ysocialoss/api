@@ -160,3 +160,13 @@ test("the defaults match the parameters published on /legal/feed in ysocial_web"
     snoozeDays: 30,
   });
 });
+
+test("explanations survive malformed trained heads", async () => {
+  const { readHeads, priorHeads } = await import("../src/ranking/model.ts");
+  const { factorStrengths } = await import("../src/ranking/explain.ts");
+  const heads = readHeads({ like: { bias: 0 }, click: { bias: -1, weights: { affinity: 2, unknown: 5 }, source: "trained" } });
+  assert.deepEqual(heads.like, priorHeads.like);
+  assert.deepEqual(heads.click.weights, { affinity: 2 });
+  const features = vector({ affinity: 1 });
+  assert.ok(factorStrengths(features, predict(priorModel, features), heads, defaultConfig).length > 0);
+});

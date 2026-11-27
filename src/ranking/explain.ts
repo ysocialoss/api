@@ -3,7 +3,7 @@ import { db } from "../db/index.ts";
 import { feedCandidates, feedModels, feedRequests, posts } from "../db/schema.ts";
 import { AuthError } from "../auth/provider.ts";
 import { headNames, loadConfig, type FeedConfig, type Head } from "./config.ts";
-import { featureNames, priorHeads, type FeatureName, type HeadWeights } from "./model.ts";
+import { featureNames, priorHeads, readHeads, type FeatureName, type HeadWeights } from "./model.ts";
 import { loadControls, loadPostTopics } from "./feedback.ts";
 import type { Controls } from "./controls.ts";
 
@@ -95,7 +95,7 @@ export async function explain(viewerId: string, postId: string, requestId: strin
   let heads = priorHeads;
   if (row.modelId) {
     const [model] = await db.select({ heads: feedModels.heads }).from(feedModels).where(eq(feedModels.id, row.modelId)).limit(1);
-    if (model && typeof model.heads === "object" && model.heads !== null) heads = { ...priorHeads, ...(model.heads as Record<Head, HeadWeights>) };
+    heads = (model && readHeads(model.heads)) ?? priorHeads;
   }
   const factors = factorStrengths(row.features, row.predictions, heads, config);
   const [controls, topics, author] = await Promise.all([
