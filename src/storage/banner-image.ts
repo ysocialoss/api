@@ -1,6 +1,7 @@
 import sharp, { type Metadata } from "sharp";
 import { AuthError } from "../auth/provider.ts";
 import { isAnimatedPng } from "./animated-png.ts";
+import { runImageWork } from "./image-work.ts";
 
 export const bannerUploadLimit = 10 * 1024 * 1024;
 const stillMaxSide = 1600;
@@ -66,6 +67,10 @@ async function stillBanner(input: Buffer, metadata: Metadata): Promise<Banner> {
 export async function normalizeBanner(input: Buffer): Promise<Banner & { animated: boolean }> {
   if (!input.length || input.length > bannerUploadLimit)
     throw new AuthError(400, "invalid_banner");
+  return runImageWork(() => normalizeBannerNow(input));
+}
+
+async function normalizeBannerNow(input: Buffer): Promise<Banner & { animated: boolean }> {
   let metadata: Metadata;
   try {
     const image = sharp(input, {
@@ -94,13 +99,15 @@ export async function normalizeBanner(input: Buffer): Promise<Banner & { animate
 }
 
 export async function bannerScreeningImage(body: Buffer) {
-  try {
-    return await sharp(body, { limitInputPixels, failOn: "warning" })
-      .autoOrient()
-      .resize({ width: 768, height: 768, fit: "inside", withoutEnlargement: true })
-      .avif({ effort: 1 })
-      .toBuffer();
-  } catch {
-    throw new AuthError(400, "invalid_banner");
-  }
+  return runImageWork(async () => {
+    try {
+      return await sharp(body, { limitInputPixels, failOn: "warning" })
+        .autoOrient()
+        .resize({ width: 768, height: 768, fit: "inside", withoutEnlargement: true })
+        .avif({ effort: 1 })
+        .toBuffer();
+    } catch {
+      throw new AuthError(400, "invalid_banner");
+    }
+  });
 }

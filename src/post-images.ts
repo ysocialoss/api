@@ -8,6 +8,7 @@ import { requireUser, readViewerId } from "./auth/request.ts";
 import { db } from "./db/index.ts";
 import { postImageFlags, postImages, posts, users } from "./db/schema.ts";
 import { screenImage, withImageModeration } from "./image-moderation.ts";
+import { imageWorkStats, runImageWork } from "./storage/image-work.ts";
 import { isAnimatedPng } from "./storage/animated-png.ts";
 import { scanUpload } from "./safety/hash-match.ts";
 import { claimStagedUpload, discardStagedUpload, stageMediaUpload } from "./storage/media-lifecycle.ts";
@@ -25,20 +26,24 @@ const outputType = "image/avif";
 export const imageFlagCutoff = () => new Date(Date.now() - flagLifetimeMs);
 const formats = new Set(["jpeg", "png", "webp"]);
 
+// The AVIF encode at 2048px dominates memory (~120-170 MiB per photo whatever the input size).
+// Effort 3 produces the same file size as 4 with about a quarter less memory and far less time.
 async function normalizeImage(data: Buffer) {
-  try {
-    const image = sharp(data, { limitInputPixels: 25_000_000, failOn: "warning" });
-    const { format, pages } = await image.metadata();
-    if (!format || !formats.has(format) || (pages ?? 1) !== 1 ||
-        (format === "png" && isAnimatedPng(data)))
-      throw new Error("Unsupported image format");
-    return await image.autoOrient()
-      .resize({ width: 2048, height: 2048, fit: "inside", withoutEnlargement: true })
-      .avif({ quality: 60, effort: 4 })
-      .toBuffer();
-  } catch {
-    throw new AuthError(400, "invalid_post_image");
-  }
+  return runImageWork(async () => {
+    try {
+      const image = sharp(data, { limitInputPixels: 25_000_000, failOn: "warning" });
+      const { format, pages } = await image.metadata();
+      if (!format || !formats.has(format) || (pages ?? 1) !== 1 ||
+          (format === "png" && isAnimatedPng(data)))
+        throw new Error("Unsupported image format");
+      return await image.autoOrient()
+        .resize({ width: 2048, height: 2048, fit: "inside", withoutEnlargement: true })
+        .avif({ quality: 60, effort: 3 })
+        .toBuffer();
+    } catch {
+      throw new AuthError(400, "invalid_post_image");
+    }
+  });
 }
 
 function uploadFilename(header: string | undefined) {
@@ -97,7 +102,16 @@ export async function processPostImage<T>(
   await scanUpload({ bytes: body, mime: "application/octet-stream", surface: "post_image", uploaderId, ip });
   requireAvatarStorage();
   return withImageModeration(async () => {
+    const started = performance.now();
     const data = await normalizeImage(body);
+    console.info({
+      event: "post_image_processed",
+      bytesIn: body.length,
+      bytesOut: data.length,
+      ms: Math.round(performance.now() - started),
+      rssMiB: Math.round(process.memoryUsage.rss() / 1048576),
+      gate: imageWorkStats(),
+    });
     await screenImage({ data, uploaderId, filename: uploadFilename(filename) });
     return save(data);
   });

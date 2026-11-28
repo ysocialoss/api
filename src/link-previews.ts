@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { parse } from "parse5";
 import sharp from "sharp";
+import { runImageWork } from "./storage/image-work.ts";
 import { postLinks } from "./post-links.ts";
 import { canPreviewUrl, fetchPublicPreview } from "./public-preview-fetch.ts";
 
@@ -269,20 +270,22 @@ export async function previewImageForPost(content: string, key: string) {
       sameHost: Boolean(direct),
     });
     if (!result) return;
-    const image = sharp(result.body, {
-      limitInputPixels: 12_000_000,
-      failOn: "error",
+    return await runImageWork(async () => {
+      const image = sharp(result.body, {
+        limitInputPixels: 12_000_000,
+        failOn: "error",
+      });
+      const { format } = await image.metadata();
+      if (!format || !rasterFormats.has(format)) return;
+      return await image
+        .rotate()
+        .resize(direct ? 1200 : 800, direct ? 1200 : 450, {
+          fit: "inside",
+          withoutEnlargement: true,
+        })
+        .webp({ quality: 80 })
+        .toBuffer();
     });
-    const { format } = await image.metadata();
-    if (!format || !rasterFormats.has(format)) return;
-    return await image
-      .rotate()
-      .resize(direct ? 1200 : 800, direct ? 1200 : 450, {
-        fit: "inside",
-        withoutEnlargement: true,
-      })
-      .webp({ quality: 80 })
-      .toBuffer();
   } catch {
     return;
   }

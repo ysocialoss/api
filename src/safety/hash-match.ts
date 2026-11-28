@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import sharp from "sharp";
+import { runImageWork } from "../storage/image-work.ts";
 import { AuthError } from "../auth/provider.ts";
 import { env } from "../config.ts";
 import { db } from "../db/index.ts";
@@ -54,13 +55,19 @@ export function hashMatcher(): HashMatcher | null {
 }
 
 async function frames(bytes: Buffer) {
-  const metadata = await sharp(bytes, { animated: true, limitInputPixels: 40_000_000 }).metadata();
-  const pages = Math.max(1, metadata.pages ?? 1);
-  const picks = [...new Set([0, Math.floor(pages / 2), pages - 1])];
-  return Promise.all(picks.map((page) => sharp(bytes, { page, limitInputPixels: 40_000_000 })
-    .resize({ width: 2048, height: 2048, fit: "inside", withoutEnlargement: true })
-    .png()
-    .toBuffer()));
+  return runImageWork(async () => {
+    const metadata = await sharp(bytes, { animated: true, limitInputPixels: 40_000_000 }).metadata();
+    const pages = Math.max(1, metadata.pages ?? 1);
+    const picks = [...new Set([0, Math.floor(pages / 2), pages - 1])];
+    // One frame at a time: decoding all picks in parallel multiplies the peak memory.
+    const decoded: Buffer[] = [];
+    for (const page of picks)
+      decoded.push(await sharp(bytes, { page, limitInputPixels: 40_000_000 })
+        .resize({ width: 2048, height: 2048, fit: "inside", withoutEnlargement: true })
+        .png()
+        .toBuffer());
+    return decoded;
+  });
 }
 
 export async function recordIncident(details: {

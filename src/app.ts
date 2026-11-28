@@ -1,5 +1,6 @@
 import { beginDraining, createHealthRouter, isDraining } from "./health.ts";
 import { startMediaCleanup } from "./storage/media-lifecycle.ts";
+import { startMemoryMonitor } from "./memory-monitor.ts";
 import banners from "./banners.ts";
 import avatars from "./avatars.ts";
 import voices from "./voices.ts";
@@ -167,6 +168,7 @@ if (import.meta.main) {
   let stopLiveEvents = () => {};
   let stopGithubRefresh = () => {};
   let stopRetention = () => {};
+  const stopMemoryMonitor = startMemoryMonitor();
   const server = app.listen(env.PORT, () =>
     console.info(`API listening on port ${env.PORT}`),
   );
@@ -187,6 +189,7 @@ if (import.meta.main) {
       dmSocket.stop();
       stopGithubRefresh();
       stopRetention();
+      stopMemoryMonitor();
       setTimeout(() => {
         server.close(() => { void pool.end(); });
         server.closeIdleConnections();
