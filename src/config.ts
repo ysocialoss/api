@@ -61,6 +61,11 @@ export const env = z
     ABUSE_EMAIL: blank(z.email()),
     PHOTODNA_URL: blank(z.url({ protocol: /^https?$/ })),
     PHOTODNA_KEY: blank(z.string().min(1)),
+    // Memory-heavy image work (one large photo is ~120-170 MiB) runs this many jobs at a time per replica;
+    // others wait in a bounded queue and get 429 post_image_busy when it is full or they wait too long.
+    IMAGE_WORK_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(1),
+    IMAGE_WORK_QUEUE: z.coerce.number().int().min(0).max(64).default(8),
+    IMAGE_WORK_WAIT_MS: z.coerce.number().int().min(0).max(120_000).default(20_000),
     TRUST_PROXY: blank(z.string()),
     CLIENT_IP_HEADER: blank(z.string().regex(/^[A-Za-z0-9-]+$/)),
     // set on staging so unreleased changelog entries show as "coming soon".
